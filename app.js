@@ -24,6 +24,9 @@ function createMsalConfig(tenantId, clientId) {
 document.addEventListener('DOMContentLoaded', function() {
     console.log('DOM Content Loaded');
     
+    // Make sure loading overlay is hidden on page load
+    hideLoading();
+    
     // Check if MSAL library is loaded
     if (typeof msal === 'undefined') {
         console.error('MSAL library not loaded');
@@ -34,10 +37,17 @@ document.addEventListener('DOMContentLoaded', function() {
     console.log('MSAL library loaded successfully');
     
     // Set redirect URI in instructions
-    document.getElementById('redirectUri').textContent = window.location.origin;
+    const redirectUriElement = document.getElementById('redirectUri');
+    if (redirectUriElement) {
+        redirectUriElement.textContent = window.location.origin;
+    }
     
     // Load saved credentials if available
-    loadSavedCredentials();
+    try {
+        loadSavedCredentials();
+    } catch (error) {
+        console.error('Error loading saved credentials:', error);
+    }
     
     // Event listeners
     document.getElementById('authForm').addEventListener('submit', handleAuthentication);
@@ -501,13 +511,24 @@ function handleLogout() {
 
 // UI Helper functions
 function showLoading(message, details = '') {
-    document.getElementById('loadingMessage').textContent = message;
-    document.getElementById('loadingDetails').textContent = details;
-    document.getElementById('loadingOverlay').classList.remove('hidden');
+    const overlay = document.getElementById('loadingOverlay');
+    const messageEl = document.getElementById('loadingMessage');
+    const detailsEl = document.getElementById('loadingDetails');
+    
+    if (messageEl) messageEl.textContent = message;
+    if (detailsEl) detailsEl.textContent = details;
+    if (overlay) {
+        overlay.classList.remove('hidden');
+        overlay.style.display = 'flex';
+    }
 }
 
 function hideLoading() {
-    document.getElementById('loadingOverlay').classList.add('hidden');
+    const overlay = document.getElementById('loadingOverlay');
+    if (overlay) {
+        overlay.classList.add('hidden');
+        overlay.style.display = 'none';
+    }
 }
 
 function showError(message) {
