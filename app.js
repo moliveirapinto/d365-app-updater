@@ -1,7 +1,7 @@
 // Global variables
 let msalInstance = null;
 let accessToken = null;
-let bapToken = null; // Power Platform API token
+let bapToken = null;
 let environmentId = null;
 let orgUrl = null;
 let apps = [];
@@ -116,11 +116,7 @@ async function handleAuthentication(event) {
         return;
     }
     
-    orgUrl = orgUrlValue.replace(/\/$/, ''); // Remove trailing slash
-    
-    // Extract environment ID from URL if possible
-    // Format: https://admin.powerplatform.microsoft.com/manage/environments/{environmentId}/applications
-    // Or from org URL: https://{orgname}.crm.dynamics.com
+    orgUrl = orgUrlValue.replace(/\/$/, '');
     
     // Save credentials if requested
     if (rememberMe) {
@@ -187,15 +183,7 @@ async function handleAuthentication(event) {
         } else if (error.message.includes('AADSTS500113')) {
             errorMessage = 'Redirect URI not configured. Add ' + window.location.origin + ' to your Azure AD app registration.';
         } else if (error.message.includes('endpoints_resolution_error') || error.message.includes('openid_config_error')) {
-            errorMessage = '❌ Invalid Tenant ID!\n\n' +
-                          'The Tenant ID you entered appears to be invalid or you may have entered the Client ID instead.\n\n' +
-                          '✓ Tenant ID = Directory (tenant) ID from Azure AD Overview\n' +
-                          '✗ Do NOT use the Application (client) ID here\n\n' +
-                          'To find your Tenant ID:\n' +
-                          '1. Go to Azure Portal → Azure Active Directory\n' +
-                          '2. Click "Overview"\n' +
-                          '3. Copy the "Tenant ID" (Directory ID)\n\n' +
-                          'Current tenant ID you entered: ' + document.getElementById('tenantId').value;
+            errorMessage = 'Invalid Tenant ID! The Tenant ID you entered appears to be invalid. Please check your Azure AD settings.';
         }
         
         showError(errorMessage);
@@ -251,7 +239,6 @@ async function getBAPToken() {
 // Get environment information
 async function getEnvironmentInfo() {
     try {
-        // Try to get organization info from Dynamics
         const response = await fetch(`${orgUrl}/api/data/v9.2/organizations?$select=name,organizationid`, {
             method: 'GET',
             headers: {
@@ -268,7 +255,6 @@ async function getEnvironmentInfo() {
                 const org = data.value[0];
                 document.getElementById('environmentName').textContent = org.name;
                 environmentId = org.organizationid;
-                
                 console.log('Environment ID:', environmentId);
                 return;
             }
@@ -282,21 +268,14 @@ async function getEnvironmentInfo() {
 
 // Load applications from the environment
 async function loadApplications() {
-    showLoading('Loading applications...', 'Fetching installed apps from Power Platform');
+    showLoading('Loading applications...', 'Fetching installed apps');
     
     const appsList = document.getElementById('appsList');
-    appsList.innerHTML = `
-        <div class="text-center py-5">
-            <div class="spinner-border text-primary" role="status">
-                <span class="visually-hidden">Loading...</span>
-            </div>
-            <p class="mt-3">Loading applications...</p>
-        </div>
-    `;
+    appsList.innerHTML = '<div class="text-center py-5"><div class="spinner-border text-primary"></div><p class="mt-3">Loading applications...</p></div>';
     
     try {
         if (!environmentId) {
-            throw new Error('Environment ID not found');
+            throw new Error('Environment ID not found. Please try reconnecting.');
         }
         
         // Get BAP token for Power Platform API
@@ -321,7 +300,7 @@ async function loadApplications() {
         if (!response.ok) {
             const errorText = await response.text();
             console.error('API Error:', response.status, errorText);
-            throw new Error(`Failed to fetch applications: ${response.status} - ${errorText}`);
+            throw new Error(`Failed to fetch applications: ${response.status}`);
         }
         
         const data = await response.json();
@@ -329,17 +308,17 @@ async function loadApplications() {
         
         apps = (data.value || []).map(app => ({
             id: app.id || app.applicationId,
-            name: app.properties?.displayName || app.properties?.applicationUniqueName || app.name,
-            version: app.properties?.applicationVersion || 'Unknown',
-            installedOn: app.properties?.createdTime,
-            publisher: app.properties?.publisherName || 'Microsoft',
-            hasUpdate: false, // Will check for updates
-            latestVersion: app.properties?.applicationVersion || 'Unknown',
+            name: app.properties && app.properties.displayName ? app.properties.displayName : (app.name || 'Unknown'),
+            version: app.properties && app.properties.applicationVersion ? app.properties.applicationVersion : 'Unknown',
+            installedOn: app.properties ? app.properties.createdTime : null,
+            publisher: app.properties && app.properties.publisherName ? app.properties.publisherName : 'Microsoft',
+            hasUpdate: false,
+            latestVersion: app.properties && app.properties.applicationVersion ? app.properties.applicationVersion : 'Unknown',
             updateAvailable: null
         }));
         
-        // Check for available updates for each app
-        showLoading('Checking for updates...', `Checking ${apps.length} applications`);
+        // Check for available updates
+        showLoading('Checking for updates...', 'Checking ' + apps.length + ' applications');
         await checkForUpdates();
         
         displayApplications();
@@ -348,28 +327,16 @@ async function loadApplications() {
     } catch (error) {
         hideLoading();
         console.error('Error loading applications:', error);
-        appsList.innerHTML = `
-            <div class="alert alert-danger">
-                <i class="fas fa-exclamation-triangle"></i> 
-                <strong>Failed to load applications</strong><br>
-                ${error.message}<br><br>
-                <small>Make sure you have the correct permissions and that Power Platform Admin API access is configured.</small>
-            </div>
-        `;
+        appsList.innerHTML = '<div class="alert alert-danger"><i class="fas fa-exclamation-triangle"></i> <strong>Failed to load applications</strong><br>' + error.message + '</div>';
     }
 }
 
 // Check for available updates for all apps
 async function checkForUpdates() {
-    // For now, query the catalog for each app to see if newer version exists
-    // This is a simplified approach - real implementation may need to use different APIs
-    
     for (let i = 0; i < apps.length; i++) {
         const app = apps[i];
         try {
-            // Check if there's a newer version available
-            // Note: This API endpoint may need adjustment based on actual Power Platform APIs
-            const updateUrl = `https://api.bap.microsoft.com/providers/Microsoft.BusinessAppPlatform/applicationPackages?api-version=2022-03-01-preview&$filter=applicationUniqueName eq '${app.name}'`;
+            const updateUrl = 'https://api.bap.microsoft.com/providers/Microsoft.BusinessAppPlatform/applicationPackages?api-version=2022-03-01-preview';
             
             const response = await fetch(updateUrl, {
                 method: 'GET',
@@ -382,49 +349,25 @@ async function checkForUpdates() {
             if (response.ok) {
                 const catalogData = await response.json();
                 if (catalogData.value && catalogData.value.length > 0) {
-                    const latestInCatalog = catalogData.value[0];
-                    const latestVersion = latestInCatalog.properties?.applicationVersion;
+                    // Find matching app in catalog
+                    const catalogApp = catalogData.value.find(function(c) {
+                        const cName = c.properties && c.properties.applicationUniqueName ? c.properties.applicationUniqueName : '';
+                        return cName === app.name;
+                    });
                     
-                    if (latestVersion && latestVersion !== app.version) {
-                        app.hasUpdate = true;
-                        app.latestVersion = latestVersion;
-                        app.updateAvailable = latestInCatalog;
+                    if (catalogApp && catalogApp.properties) {
+                        const latestVersion = catalogApp.properties.applicationVersion;
+                        if (latestVersion && latestVersion !== app.version) {
+                            app.hasUpdate = true;
+                            app.latestVersion = latestVersion;
+                            app.updateAvailable = catalogApp;
+                        }
                     }
                 }
             }
         } catch (error) {
-            console.warn(`Could not check update for ${app.name}:`, error);
+            console.warn('Could not check update for ' + app.name + ':', error);
         }
-                method: 'GET',
-                headers: {
-                    'Authorization': `Bearer ${accessToken}`,
-                    'OData-MaxVersion': '4.0',
-                    'OData-Version': '4.0',
-                    'Accept': 'application/json',
-                },
-            }
-        );
-        
-        if (!response.ok) {
-            throw new Error(`Failed to fetch solutions: ${response.status}`);
-        }
-        
-        const data = await response.json();
-        apps = data.value.map(solution => ({
-            msdyn_solutionid: solution.solutionid,
-            msdyn_name: solution.friendlyname,
-            msdyn_displayname: solution.friendlyname,
-            msdyn_version: solution.version,
-            msdyn_installedon: solution.installedon,
-            hasUpdate: Math.random() > 0.7,
-            latestVersion: incrementVersion(solution.version)
-        }));
-        
-        displayApplications();
-        hideLoading();
-        
-    } catch (error) {
-        throw new Error('Could not load applications using alternative method: ' + error.message);
     }
 }
 
@@ -433,68 +376,57 @@ function displayApplications() {
     const appsList = document.getElementById('appsList');
     
     if (apps.length === 0) {
-        appsList.innerHTML = `
-            <div class="text-center py-5">
-                <i class="fas fa-inbox fa-3x text-muted mb-3"></i>
-                <p class="tename || 'Unknown App';
+        appsList.innerHTML = '<div class="text-center py-5"><i class="fas fa-inbox fa-3x text-muted mb-3"></i><p class="text-muted">No applications found in this environment.</p></div>';
+        return;
+    }
+    
+    const appsWithUpdates = apps.filter(function(app) { return app.hasUpdate; });
+    document.getElementById('updateCount').textContent = appsWithUpdates.length;
+    document.getElementById('updateAllBtn').disabled = appsWithUpdates.length === 0;
+    
+    let html = '';
+    
+    for (let i = 0; i < apps.length; i++) {
+        const app = apps[i];
+        const appName = app.name || 'Unknown App';
         const currentVersion = app.version || '1.0.0.0';
         const installedDate = app.installedOn ? new Date(app.installedOn).toLocaleDateString() : 'Unknown';
         
-        html += `
-            <div class="app-card">
-                <div class="row align-items-center">
-                    <div class="col-md-6">
-                        <div class="app-name">
-                            <i class="fas fa-cube me-2"></i>${escapeHtml(appName)}
-                        </div>
-                        <div class="app-version mt-2">
-                            <i class="fas fa-tag"></i> Current: ${escapeHtml(currentVersion)}
-                            ${app.hasUpdate ? `<br><i class="fas fa-arrow-up text-success"></i> Available: <strong>${escapeHtml(app.latestVersion)}</strong>` : ''}
-                        </div>
-                        <div class="text-muted small mt-1">
-                            <i class="fas fa-calendar"></i> Installed: ${installedDate}
-                        </div>
-                    </div>
-                    <div class="col-md-3">
-                        ${app.hasUpdate ? 
-                            '<span class="badge-update"><i class="fas fa-arrow-circle-up"></i> Update Available</span>' : 
-                            '<span class="badge-current"><i class="fas fa-check-circle"></i> Up to Date</span>'
-                        }
-                    </div>
-                    <div class="col-md-3 text-end">
-                        ${app.hasUpdate ? 
-                            `<button class="btn btn-success" onclick="updateSingleApp('${app.
-                        <div class="text-muted small mt-1">
-                            <i class="fas fa-calendar"></i> Installed: ${installedDate}
-                        </div>
-                    </div>
-                    <div class="col-md-3">
-                        ${app.hasUpdate ? 
-                            '<span class="badge-update"><i class="fas fa-arrow-circle-up"></i> Update Available</span>' : 
-                            '<span class="badge-current"><i class="fas fa-check-circle"></i> Up to Date</span>'
-                        }
-                    </div>
-                    <div class="col-md-3 text-end">
-                        ${app.hasUpdate ? 
-                            `<button class="btn btn-success" onclick="updateSingleApp('${app.msdyn_solutionid}')">
-                                <i class="fas fa-download"></i> Update Now
-                            </button>` : 
-                            `<button class="btn btn-outline-secondary" disabled>
-                                <i class="fas fa-check"></i> Current
-                            </button>`
-                        }
-                    </div>
-                </div>
-            </div>
-        `;
-    });
+        html += '<div class="app-card">';
+        html += '<div class="row align-items-center">';
+        html += '<div class="col-md-6">';
+        html += '<div class="app-name"><i class="fas fa-cube me-2"></i>' + escapeHtml(appName) + '</div>';
+        html += '<div class="app-version mt-2"><i class="fas fa-tag"></i> Current: ' + escapeHtml(currentVersion);
+        if (app.hasUpdate) {
+            html += '<br><i class="fas fa-arrow-up text-success"></i> Available: <strong>' + escapeHtml(app.latestVersion) + '</strong>';
+        }
+        html += '</div>';
+        html += '<div class="text-muted small mt-1"><i class="fas fa-calendar"></i> Installed: ' + installedDate + '</div>';
+        html += '</div>';
+        html += '<div class="col-md-3">';
+        if (app.hasUpdate) {
+            html += '<span class="badge-update"><i class="fas fa-arrow-circle-up"></i> Update Available</span>';
+        } else {
+            html += '<span class="badge-current"><i class="fas fa-check-circle"></i> Up to Date</span>';
+        }
+        html += '</div>';
+        html += '<div class="col-md-3 text-end">';
+        if (app.hasUpdate) {
+            html += '<button class="btn btn-success" onclick="updateSingleApp(\'' + app.id + '\')"><i class="fas fa-download"></i> Update Now</button>';
+        } else {
+            html += '<button class="btn btn-outline-secondary" disabled><i class="fas fa-check"></i> Current</button>';
+        }
+        html += '</div>';
+        html += '</div>';
+        html += '</div>';
+    }
     
     appsList.innerHTML = html;
 }
 
 // Update a single app
 async function updateSingleApp(appId) {
-    const app = apps.find(a => a.id === appId);
+    const app = apps.find(function(a) { return a.id === appId; });
     if (!app) {
         showError('App not found');
         return;
@@ -502,18 +434,16 @@ async function updateSingleApp(appId) {
     
     const appName = app.name;
     
-    if (!confirm(`Update ${appName} to version ${app.latestVersion}?\n\nThis will trigger a real update in your Power Platform environment.`)) {
+    if (!confirm('Update ' + appName + ' to version ' + app.latestVersion + '?\n\nThis will trigger a real update in your Power Platform environment.')) {
         return;
     }
     
-    showLoading('Updating...', `Installing ${appName}`);
+    showLoading('Updating...', 'Installing ' + appName);
     
     try {
-        // Trigger the actual update using Power Platform API
-        const installUrl = `https://api.bap.microsoft.com/providers/Microsoft.BusinessAppPlatform/scopes/admin/environments/${environmentId}/applicationPackages/${appId}/install?api-version=2022-03-01-preview`;
+        const installUrl = 'https://api.bap.microsoft.com/providers/Microsoft.BusinessAppPlatform/scopes/admin/environments/' + environmentId + '/applicationPackages/' + appId + '/install?api-version=2022-03-01-preview';
         
         console.log('Triggering update for:', appName);
-        console.log('Install URL:', installUrl);
         
         const response = await fetch(installUrl, {
             method: 'POST',
@@ -529,7 +459,7 @@ async function updateSingleApp(appId) {
         if (!response.ok) {
             const errorText = await response.text();
             console.error('Update failed:', response.status, errorText);
-            throw new Error(`Update failed: ${response.status} - ${errorText}`);
+            throw new Error('Update failed: ' + response.status);
         }
         
         const operation = await response.json();
@@ -537,7 +467,74 @@ async function updateSingleApp(appId) {
         
         // Poll for completion
         if (operation.id || operation.name) {
-            await pollUpdateStatus(operation.id || operation.name\n\nThis will trigger REAL updates in your Power Platform environment. This may take several minutes.`)) {
+            await pollUpdateStatus(operation.id || operation.name, appName);
+        }
+        
+        // Mark as updated
+        app.hasUpdate = false;
+        app.version = app.latestVersion;
+        
+        hideLoading();
+        displayApplications();
+        showSuccess(appName + ' updated successfully!');
+        
+    } catch (error) {
+        hideLoading();
+        console.error('Update error:', error);
+        showError('Failed to update ' + appName + ': ' + error.message);
+    }
+}
+
+// Poll for update completion status
+async function pollUpdateStatus(operationId, appName) {
+    let attempts = 0;
+    const maxAttempts = 60;
+    
+    while (attempts < maxAttempts) {
+        try {
+            const statusUrl = 'https://api.bap.microsoft.com/providers/Microsoft.BusinessAppPlatform/operations/' + operationId + '?api-version=2022-03-01-preview';
+            
+            const response = await fetch(statusUrl, {
+                method: 'GET',
+                headers: {
+                    'Authorization': `Bearer ${bapToken}`,
+                    'Accept': 'application/json',
+                },
+            });
+            
+            if (response.ok) {
+                const operation = await response.json();
+                const state = operation.properties ? operation.properties.provisioningState : operation.status;
+                
+                if (state === 'Succeeded') {
+                    return true;
+                } else if (state === 'Failed') {
+                    throw new Error('Update failed');
+                }
+                
+                document.getElementById('loadingDetails').textContent = 'Installing ' + appName + '... (' + (attempts * 5) + 's elapsed)';
+            }
+        } catch (error) {
+            console.warn('Error polling status:', error);
+        }
+        
+        await new Promise(function(resolve) { setTimeout(resolve, 5000); });
+        attempts++;
+    }
+    
+    throw new Error('Update timeout - operation took too long');
+}
+
+// Update all apps
+async function updateAllApps() {
+    const appsToUpdate = apps.filter(function(app) { return app.hasUpdate; });
+    
+    if (appsToUpdate.length === 0) {
+        showError('No apps need updating');
+        return;
+    }
+    
+    if (!confirm('Update all ' + appsToUpdate.length + ' applications?\n\nThis will trigger REAL updates in your Power Platform environment.')) {
         return;
     }
     
@@ -545,17 +542,15 @@ async function updateSingleApp(appId) {
     
     let successCount = 0;
     let failCount = 0;
-    const errors = [];
     
     for (let i = 0; i < appsToUpdate.length; i++) {
         const app = appsToUpdate[i];
         const appName = app.name;
         
-        document.getElementById('loadingDetails').textContent = 
-            `Updating ${i + 1} of ${appsToUpdate.length}: ${appName}`;
+        document.getElementById('loadingDetails').textContent = 'Updating ' + (i + 1) + ' of ' + appsToUpdate.length + ': ' + appName;
         
         try {
-            const installUrl = `https://api.bap.microsoft.com/providers/Microsoft.BusinessAppPlatform/scopes/admin/environments/${environmentId}/applicationPackages/${app.id}/install?api-version=2022-03-01-preview`;
+            const installUrl = 'https://api.bap.microsoft.com/providers/Microsoft.BusinessAppPlatform/scopes/admin/environments/' + environmentId + '/applicationPackages/' + app.id + '/install?api-version=2022-03-01-preview';
             
             const response = await fetch(installUrl, {
                 method: 'POST',
@@ -569,14 +564,13 @@ async function updateSingleApp(appId) {
             });
             
             if (!response.ok) {
-                throw new Error(`HTTP ${response.status}`);
+                throw new Error('HTTP ' + response.status);
             }
             
             const operation = await response.json();
             
-            // Wait for completion (with timeout)
             if (operation.id || operation.name) {
-                await pollUpdateStatus(operation.id || operation.name, appName, 30); // Shorter timeout for batch
+                await pollUpdateStatus(operation.id || operation.name, appName);
             }
             
             app.hasUpdate = false;
@@ -584,8 +578,7 @@ async function updateSingleApp(appId) {
             successCount++;
             
         } catch (error) {
-            console.error(`Failed to update ${appName}:`, error);
-            errors.push(`${appName}: ${error.message}`);
+            console.error('Failed to update ' + appName + ':', error);
             failCount++;
         }
     }
@@ -594,98 +587,17 @@ async function updateSingleApp(appId) {
     displayApplications();
     
     if (failCount === 0) {
-        showSuccess(`All ${successCount} applications updated successfully!`);
+        showSuccess('All ' + successCount + ' applications updated successfully!');
     } else {
-        const errorDetails = errors.length > 0 ? '\n\nErrors:\n' + errors.slice(0, 5).join('\n') : '';
-        showError(`Updated ${successCount} apps. ${failCount} failed.${errorDetails}`
+        showError('Updated ' + successCount + ' apps. ' + failCount + ' failed.');
     }
-    
-    throw new Error('Update timeout - operation took too long');
-}
-
-// Update all apps
-async function updateAllApps() {
-    const appsToUpdate = apps.filter(app => app.hasUpdate);
-    
-    if (appsToUpdate.length === 0) {
-        showError('No apps need updating');
-        return;
-    }
-    
-    if (!confirm(`Update all ${appsToUpdate.length} applications?`)) {
-        return;
-    }
-    
-    showLoading('Updating all apps...', 'This may take several minutes');
-    
-    let successCount = 0;
-    let failCount = 0;
-    
-    for (let i = 0; i < appsToUpdate.length; i++) {
-        const app = appsToUpdate[i];
-        const appName = app.msdyn_displayname || app.msdyn_name;
-        
-        document.getElementById('loadingDetails').textContent = 
-            `Updating ${i + 1} of ${appsToUpdate.length}: ${appName}`;
-        
-        try {
-            await simulateUpdate(app.msdyn_solutionid, appName);
-            app.hasUpdate = false;
-            app.msdyn_version = app.latestVersion;
-            successCount++;
-        } catch (error) {
-            console.error(`Failed to update ${appName}:`, error);
-            failCount++;
-        }
-    }
-    
-    hideLoading();
-    displayApplications();
-    
-    if (failCount === 0) {
-        showSuccess(`All ${successCount} applications updated successfully!`);
-    } else {
-        showError(`Updated ${successCount} apps. ${failCount} failed.`);
-    }
-}
-
-// Simulate update process (replace with actual API calls)
-async function simulateUpdate(appId, appName) {
-    // Simulate API call delay
-    await new Promise(resolve => setTimeout(resolve, 1000));
-    
-    // ⚠️ SIMULATION ONLY - Real implementation requires:
-    // 1. Power Platform Admin API authentication
-    // 2. Query available updates from Microsoft catalog
-    // 3. Trigger update installation via Admin API
-    // 4. Poll for completion status
-    // See: https://github.com/moliveirapinto/d365-app-updater/blob/main/POWERPLATFORM_API.md
-    
-    console.log(`[SIMULATED] Updating app: ${appName} (${appId})`);
-    
-    // Simulate deterministic failures based on app ID (consistent results)
-    const appIdNum = parseInt(appId.substring(0, 8), 16);
-    if (appIdNum % 10 === 0) {
-        throw new Error('Update failed - simulated error for demo purposes');
-    }
-}
-
-// Helper function to increment version number
-function incrementVersion(version) {
-    const parts = version.split('.');
-    if (parts.length >= 4) {
-        const lastPart = parseInt(parts[3]) || 0;
-        parts[3] = (lastPart + 1).toString();
-        return parts.join('.');
-    }
-    return version + '.1';
 }
 
 // Handle logout
 function handleLogout() {
     if (confirm('Are you sure you want to logout?')) {
-        // Clear session
         accessToken = null;
+        bapToken = null;
         environmentId = null;
         apps = [];
         
@@ -696,20 +608,19 @@ function handleLogout() {
             }
         }
         
-        // Switch back to auth view
         document.getElementById('appsSection').classList.add('hidden');
         document.getElementById('authSection').classList.remove('hidden');
     }
 }
 
 // UI Helper functions
-function showLoading(message, details = '') {
+function showLoading(message, details) {
     const overlay = document.getElementById('loadingOverlay');
     const messageEl = document.getElementById('loadingMessage');
     const detailsEl = document.getElementById('loadingDetails');
     
     if (messageEl) messageEl.textContent = message;
-    if (detailsEl) detailsEl.textContent = details;
+    if (detailsEl) detailsEl.textContent = details || '';
     if (overlay) {
         overlay.classList.remove('hidden');
         overlay.style.display = 'flex';
@@ -725,11 +636,12 @@ function hideLoading() {
 }
 
 function showError(message) {
-    alert('❌ Error: ' + message);
+    hideLoading();
+    alert('Error: ' + message);
 }
 
 function showSuccess(message) {
-    alert('✅ ' + message);
+    alert(message);
 }
 
 function escapeHtml(text) {
