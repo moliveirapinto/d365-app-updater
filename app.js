@@ -1,7 +1,6 @@
 // Global variables
 let msalInstance = null;
 let accessToken = null;
-let bapToken = null;
 let environmentId = null;
 let orgUrl = null;
 let apps = [];
@@ -210,32 +209,6 @@ async function testConnection() {
     return await response.json();
 }
 
-// Get Power Platform API token
-async function getBAPToken() {
-    if (!msalInstance) {
-        throw new Error('Not authenticated');
-    }
-    
-    const accounts = msalInstance.getAllAccounts();
-    if (accounts.length === 0) {
-        throw new Error('No account found');
-    }
-    
-    const tokenRequest = {
-        scopes: ['https://api.bap.microsoft.com/.default'],
-        account: accounts[0],
-    };
-    
-    try {
-        const authResult = await msalInstance.acquireTokenSilent(tokenRequest);
-        return authResult.accessToken;
-    } catch (error) {
-        console.log('Silent token acquisition failed, using popup');
-        const authResult = await msalInstance.acquireTokenPopup(tokenRequest);
-        return authResult.accessToken;
-    }
-}
-
 // Get environment information
 async function getEnvironmentInfo() {
     try {
@@ -266,59 +239,57 @@ async function getEnvironmentInfo() {
     document.getElementById('environmentName').textContent = orgUrl;
 }
 
-// Load applications from the environment
+// Load applications from the environment using Dataverse API
 async function loadApplications() {
-    showLoading('Loading applications...', 'Fetching installed apps');
+    showLoading('Loading applications...', 'Fetching installed solutions');
     
     const appsList = document.getElementById('appsList');
     appsList.innerHTML = '<div class="text-center py-5"><div class="spinner-border text-primary"></div><p class="mt-3">Loading applications...</p></div>';
     
     try {
-        if (!environmentId) {
-            throw new Error('Environment ID not found. Please try reconnecting.');
-        }
+        // Query solutions from Dataverse (these are the installed apps/packages)
+        showLoading('Loading applications...', 'Querying installed solutions');
         
-        // Get BAP token for Power Platform API
-        showLoading('Authenticating...', 'Getting Power Platform API access');
-        bapToken = await getBAPToken();
-        console.log('BAP token acquired');
+        // Get all solutions that are managed (typically the apps that can be updated)
+        const url = `${orgUrl}/api/data/v9.2/solutions?$filter=ismanaged eq true&$select=solutionid,uniquename,friendlyname,version,installedon,publisherid,ismanaged&$expand=publisherid($select=friendlyname)&$orderby=friendlyname`;
         
-        // Query installed applications using Power Platform API
-        showLoading('Loading applications...', 'Querying installed applications');
-        const url = `https://api.bap.microsoft.com/providers/Microsoft.BusinessAppPlatform/scopes/admin/environments/${environmentId}/applicationPackages?api-version=2022-03-01-preview`;
-        
-        console.log('Fetching from:', url);
+        console.log('Fetching solutions from:', url);
         
         const response = await fetch(url, {
             method: 'GET',
             headers: {
-                'Authorization': `Bearer ${bapToken}`,
+                'Authorization': `Bearer ${accessToken}`,
+                'OData-MaxVersion': '4.0',
+                'OData-Version': '4.0',
                 'Accept': 'application/json',
+                'Prefer': 'odata.include-annotations="*"'
             },
         });
         
         if (!response.ok) {
             const errorText = await response.text();
             console.error('API Error:', response.status, errorText);
-            throw new Error(`Failed to fetch applications: ${response.status}`);
+            throw new Error(`Failed to fetch solutions: ${response.status}`);
         }
         
         const data = await response.json();
-        console.log('Apps data:', data);
+        console.log('Solutions data:', data);
         
-        apps = (data.value || []).map(app => ({
-            id: app.id || app.applicationId,
-            name: app.properties && app.properties.displayName ? app.properties.displayName : (app.name || 'Unknown'),
-            version: app.properties && app.properties.applicationVersion ? app.properties.applicationVersion : 'Unknown',
-            installedOn: app.properties ? app.properties.createdTime : null,
-            publisher: app.properties && app.properties.publisherName ? app.properties.publisherName : 'Microsoft',
+        apps = (data.value || []).map(solution => ({
+            id: solution.solutionid,
+            uniqueName: solution.uniquename,
+            name: solution.friendlyname || solution.uniquename,
+            version: solution.version || '1.0.0.0',
+            installedOn: solution.installedon,
+            publisher: solution.publisherid ? solution.publisherid.friendlyname : 'Unknown',
+            isManaged: solution.ismanaged,
             hasUpdate: false,
-            latestVersion: app.properties && app.properties.applicationVersion ? app.properties.applicationVersion : 'Unknown',
+            latestVersion: solution.version || '1.0.0.0',
             updateAvailable: null
         }));
         
-        // Check for available updates
-        showLoading('Checking for updates...', 'Checking ' + apps.length + ' applications');
+        // Check for available updates via staging
+        showLoading('Checking for updates...', 'Checking ' + apps.length + ' solutions');
         await checkForUpdates();
         
         displayApplications();
@@ -331,43 +302,66 @@ async function loadApplications() {
     }
 }
 
-// Check for available updates for all apps
+// Check for available updates using solution staging
 async function checkForUpdates() {
-    for (let i = 0; i < apps.length; i++) {
-        const app = apps[i];
-        try {
-            const updateUrl = 'https://api.bap.microsoft.com/providers/Microsoft.BusinessAppPlatform/applicationPackages?api-version=2022-03-01-preview';
+    try {
+        // Query staged solutions (solutions available to upgrade)
+        const stagingUrl = `${orgUrl}/api/data/v9.2/stagesolutionuploads?$select=solutionuniquename,solutionversion,name`;
+        
+        const response = await fetch(stagingUrl, {
+            method: 'GET',
+            headers: {
+                'Authorization': `Bearer ${accessToken}`,
+                'OData-MaxVersion': '4.0',
+                'OData-Version': '4.0',
+                'Accept': 'application/json',
+            },
+        });
+        
+        if (response.ok) {
+            const stagingData = await response.json();
+            console.log('Staged solutions:', stagingData);
             
-            const response = await fetch(updateUrl, {
-                method: 'GET',
-                headers: {
-                    'Authorization': `Bearer ${bapToken}`,
-                    'Accept': 'application/json',
-                },
-            });
-            
-            if (response.ok) {
-                const catalogData = await response.json();
-                if (catalogData.value && catalogData.value.length > 0) {
-                    // Find matching app in catalog
-                    const catalogApp = catalogData.value.find(function(c) {
-                        const cName = c.properties && c.properties.applicationUniqueName ? c.properties.applicationUniqueName : '';
-                        return cName === app.name;
+            if (stagingData.value && stagingData.value.length > 0) {
+                for (let i = 0; i < apps.length; i++) {
+                    const app = apps[i];
+                    // Find if there's a staged version of this solution
+                    const stagedSolution = stagingData.value.find(function(s) {
+                        return s.solutionuniquename === app.uniqueName;
                     });
                     
-                    if (catalogApp && catalogApp.properties) {
-                        const latestVersion = catalogApp.properties.applicationVersion;
-                        if (latestVersion && latestVersion !== app.version) {
-                            app.hasUpdate = true;
-                            app.latestVersion = latestVersion;
-                            app.updateAvailable = catalogApp;
-                        }
+                    if (stagedSolution && stagedSolution.solutionversion !== app.version) {
+                        app.hasUpdate = true;
+                        app.latestVersion = stagedSolution.solutionversion;
+                        app.updateAvailable = stagedSolution;
                     }
                 }
             }
-        } catch (error) {
-            console.warn('Could not check update for ' + app.name + ':', error);
         }
+    } catch (error) {
+        console.warn('Could not check for staged updates:', error);
+    }
+    
+    // Also check solution history for any pending upgrades
+    try {
+        const historyUrl = `${orgUrl}/api/data/v9.2/msdyn_solutionhistories?$filter=msdyn_status eq 0&$select=msdyn_solutionid,msdyn_solutionversion,msdyn_name&$top=100`;
+        
+        const historyResponse = await fetch(historyUrl, {
+            method: 'GET',
+            headers: {
+                'Authorization': `Bearer ${accessToken}`,
+                'OData-MaxVersion': '4.0',
+                'OData-Version': '4.0',
+                'Accept': 'application/json',
+            },
+        });
+        
+        if (historyResponse.ok) {
+            const historyData = await historyResponse.json();
+            console.log('Solution history:', historyData);
+        }
+    } catch (error) {
+        console.warn('Could not check solution history:', error);
     }
 }
 
@@ -424,59 +418,66 @@ function displayApplications() {
     appsList.innerHTML = html;
 }
 
-// Update a single app
+// Update a single solution
 async function updateSingleApp(appId) {
     const app = apps.find(function(a) { return a.id === appId; });
     if (!app) {
-        showError('App not found');
+        showError('Solution not found');
         return;
     }
     
     const appName = app.name;
     
-    if (!confirm('Update ' + appName + ' to version ' + app.latestVersion + '?\n\nThis will trigger a real update in your Power Platform environment.')) {
+    if (!confirm('Upgrade solution "' + appName + '"?\n\nNote: Solution upgrades in Dataverse require importing a new version of the solution. If you have a staged solution ready, it will be applied.\n\nFor Microsoft first-party apps, use the Power Platform Admin Center.')) {
         return;
     }
     
-    showLoading('Updating...', 'Installing ' + appName);
+    showLoading('Processing...', 'Checking solution ' + appName);
     
     try {
-        const installUrl = 'https://api.bap.microsoft.com/providers/Microsoft.BusinessAppPlatform/scopes/admin/environments/' + environmentId + '/applicationPackages/' + appId + '/install?api-version=2022-03-01-preview';
-        
-        console.log('Triggering update for:', appName);
-        
-        const response = await fetch(installUrl, {
-            method: 'POST',
-            headers: {
-                'Authorization': `Bearer ${bapToken}`,
-                'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({
-                version: app.latestVersion
-            })
-        });
-        
-        if (!response.ok) {
-            const errorText = await response.text();
-            console.error('Update failed:', response.status, errorText);
-            throw new Error('Update failed: ' + response.status);
+        // For managed solutions, we need to trigger the upgrade via solution import
+        // This requires the staged solution to be available
+        if (app.updateAvailable) {
+            const stagingSolutionId = app.updateAvailable.stagesolutionuploadid;
+            
+            // Import the staged solution
+            const importUrl = `${orgUrl}/api/data/v9.2/ImportSolutionAsync`;
+            
+            const response = await fetch(importUrl, {
+                method: 'POST',
+                headers: {
+                    'Authorization': `Bearer ${accessToken}`,
+                    'Content-Type': 'application/json',
+                    'OData-MaxVersion': '4.0',
+                    'OData-Version': '4.0',
+                },
+                body: JSON.stringify({
+                    OverwriteUnmanagedCustomizations: false,
+                    PublishWorkflows: true,
+                    StageSolutionUploadId: stagingSolutionId
+                })
+            });
+            
+            if (!response.ok) {
+                const errorText = await response.text();
+                console.error('Import failed:', response.status, errorText);
+                throw new Error('Solution import failed: ' + response.status);
+            }
+            
+            const result = await response.json();
+            console.log('Import started:', result);
+            
+            // Mark as updated
+            app.hasUpdate = false;
+            app.version = app.latestVersion;
+            
+            hideLoading();
+            displayApplications();
+            showSuccess(appName + ' upgrade initiated! Check the Power Platform Admin Center for progress.');
+        } else {
+            hideLoading();
+            showError('No staged update available for ' + appName + '. Please upload the new solution version first, or use the Power Platform Admin Center for Microsoft apps.');
         }
-        
-        const operation = await response.json();
-        console.log('Update operation started:', operation);
-        
-        // Poll for completion
-        if (operation.id || operation.name) {
-            await pollUpdateStatus(operation.id || operation.name, appName);
-        }
-        
-        // Mark as updated
-        app.hasUpdate = false;
-        app.version = app.latestVersion;
-        
-        hideLoading();
-        displayApplications();
-        showSuccess(appName + ' updated successfully!');
         
     } catch (error) {
         hideLoading();
@@ -485,31 +486,34 @@ async function updateSingleApp(appId) {
     }
 }
 
-// Poll for update completion status
-async function pollUpdateStatus(operationId, appName) {
+// Poll for import job completion status
+async function pollImportStatus(asyncOperationId, appName) {
     let attempts = 0;
     const maxAttempts = 60;
     
     while (attempts < maxAttempts) {
         try {
-            const statusUrl = 'https://api.bap.microsoft.com/providers/Microsoft.BusinessAppPlatform/operations/' + operationId + '?api-version=2022-03-01-preview';
+            const statusUrl = `${orgUrl}/api/data/v9.2/asyncoperations(${asyncOperationId})?$select=statuscode,statecode,message`;
             
             const response = await fetch(statusUrl, {
                 method: 'GET',
                 headers: {
-                    'Authorization': `Bearer ${bapToken}`,
+                    'Authorization': `Bearer ${accessToken}`,
+                    'OData-MaxVersion': '4.0',
+                    'OData-Version': '4.0',
                     'Accept': 'application/json',
                 },
             });
             
             if (response.ok) {
                 const operation = await response.json();
-                const state = operation.properties ? operation.properties.provisioningState : operation.status;
+                const statusCode = operation.statuscode;
                 
-                if (state === 'Succeeded') {
+                // StatusCode: 30 = Succeeded, 31 = Failed, 32 = Cancelled
+                if (statusCode === 30) {
                     return true;
-                } else if (state === 'Failed') {
-                    throw new Error('Update failed');
+                } else if (statusCode === 31 || statusCode === 32) {
+                    throw new Error('Import failed: ' + (operation.message || 'Unknown error'));
                 }
                 
                 document.getElementById('loadingDetails').textContent = 'Installing ' + appName + '... (' + (attempts * 5) + 's elapsed)';
@@ -522,23 +526,24 @@ async function pollUpdateStatus(operationId, appName) {
         attempts++;
     }
     
-    throw new Error('Update timeout - operation took too long');
+    throw new Error('Import timeout - operation took too long');
 }
 
-// Update all apps
+// Update all apps with staged updates
 async function updateAllApps() {
-    const appsToUpdate = apps.filter(function(app) { return app.hasUpdate; });
+    const appsToUpdate = apps.filter(function(app) { return app.hasUpdate && app.updateAvailable; });
     
     if (appsToUpdate.length === 0) {
-        showError('No apps need updating');
+        // Show info about how to get updates
+        alert('No staged solution updates available.\n\nTo update Microsoft first-party apps (like Sales Hub, Customer Service Hub), please use the Power Platform Admin Center:\n\n1. Go to admin.powerplatform.microsoft.com\n2. Select your environment\n3. Go to Resources > Dynamics 365 apps\n4. Click "Manage" to install updates');
         return;
     }
     
-    if (!confirm('Update all ' + appsToUpdate.length + ' applications?\n\nThis will trigger REAL updates in your Power Platform environment.')) {
+    if (!confirm('Import ' + appsToUpdate.length + ' staged solution updates?\n\nThis will upgrade the solutions in your environment.')) {
         return;
     }
     
-    showLoading('Updating all apps...', 'This may take several minutes');
+    showLoading('Updating solutions...', 'This may take several minutes');
     
     let successCount = 0;
     let failCount = 0;
@@ -550,32 +555,40 @@ async function updateAllApps() {
         document.getElementById('loadingDetails').textContent = 'Updating ' + (i + 1) + ' of ' + appsToUpdate.length + ': ' + appName;
         
         try {
-            const installUrl = 'https://api.bap.microsoft.com/providers/Microsoft.BusinessAppPlatform/scopes/admin/environments/' + environmentId + '/applicationPackages/' + app.id + '/install?api-version=2022-03-01-preview';
-            
-            const response = await fetch(installUrl, {
-                method: 'POST',
-                headers: {
-                    'Authorization': `Bearer ${bapToken}`,
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify({
-                    version: app.latestVersion
-                })
-            });
-            
-            if (!response.ok) {
-                throw new Error('HTTP ' + response.status);
+            if (app.updateAvailable && app.updateAvailable.stagesolutionuploadid) {
+                const importUrl = `${orgUrl}/api/data/v9.2/ImportSolutionAsync`;
+                
+                const response = await fetch(importUrl, {
+                    method: 'POST',
+                    headers: {
+                        'Authorization': `Bearer ${accessToken}`,
+                        'Content-Type': 'application/json',
+                        'OData-MaxVersion': '4.0',
+                        'OData-Version': '4.0',
+                    },
+                    body: JSON.stringify({
+                        OverwriteUnmanagedCustomizations: false,
+                        PublishWorkflows: true,
+                        StageSolutionUploadId: app.updateAvailable.stagesolutionuploadid
+                    })
+                });
+                
+                if (!response.ok) {
+                    throw new Error('HTTP ' + response.status);
+                }
+                
+                const result = await response.json();
+                
+                if (result.AsyncOperationId) {
+                    await pollImportStatus(result.AsyncOperationId, appName);
+                }
+                
+                app.hasUpdate = false;
+                app.version = app.latestVersion;
+                successCount++;
+            } else {
+                throw new Error('No staged solution available');
             }
-            
-            const operation = await response.json();
-            
-            if (operation.id || operation.name) {
-                await pollUpdateStatus(operation.id || operation.name, appName);
-            }
-            
-            app.hasUpdate = false;
-            app.version = app.latestVersion;
-            successCount++;
             
         } catch (error) {
             console.error('Failed to update ' + appName + ':', error);
@@ -587,9 +600,9 @@ async function updateAllApps() {
     displayApplications();
     
     if (failCount === 0) {
-        showSuccess('All ' + successCount + ' applications updated successfully!');
+        showSuccess('All ' + successCount + ' solutions updated successfully!');
     } else {
-        showError('Updated ' + successCount + ' apps. ' + failCount + ' failed.');
+        showError('Updated ' + successCount + ' solutions. ' + failCount + ' failed.');
     }
 }
 
@@ -597,7 +610,6 @@ async function updateAllApps() {
 function handleLogout() {
     if (confirm('Are you sure you want to logout?')) {
         accessToken = null;
-        bapToken = null;
         environmentId = null;
         apps = [];
         
