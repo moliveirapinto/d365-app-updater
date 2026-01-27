@@ -205,9 +205,18 @@ async function loadApplications() {
         
         console.log('Fetching apps from:', url);
         
+        // Add timeout to the fetch
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 60000); // 60 second timeout
+        
         const response = await fetch(url, {
-            headers: { 'Authorization': `Bearer ${ppToken}` }
+            headers: { 'Authorization': `Bearer ${ppToken}` },
+            signal: controller.signal
         });
+        
+        clearTimeout(timeoutId);
+        
+        console.log('Response status:', response.status);
         
         if (!response.ok) {
             const errorText = await response.text();
@@ -304,13 +313,22 @@ async function loadApplications() {
         notInstalledApps.sort((a, b) => a.name.localeCompare(b.name));
         window.availableApps = notInstalledApps;
         
+        console.log('Displaying applications...');
         displayApplications();
         hideLoading();
+        console.log('Loading complete');
         
     } catch (error) {
         hideLoading();
-        console.error('Error:', error);
-        appsList.innerHTML = '<div class="alert alert-danger">Failed to load: ' + error.message + '</div>';
+        console.error('Error loading applications:', error);
+        
+        let errorMsg = error.message;
+        if (error.name === 'AbortError') {
+            errorMsg = 'Request timed out. The Power Platform API took too long to respond. Please try again.';
+        }
+        
+        const appsList = document.getElementById('appsList');
+        appsList.innerHTML = '<div class="alert alert-danger"><i class="fas fa-exclamation-triangle me-2"></i>Failed to load applications: ' + errorMsg + '</div>';
     }
 }
 
