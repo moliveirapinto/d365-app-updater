@@ -1,6 +1,7 @@
 // Global variables
 let msalInstance = null;
 let accessToken = null;
+let bapToken = null; // Power Platform API token
 let environmentId = null;
 let orgUrl = null;
 let apps = [];
@@ -212,37 +213,37 @@ async function testConnection() {
     return await response.json();
 }
 
-// Get environment information
-async function getEnvironmentInfo() {
+// Get Power Platform API token
+async function getBAPToken() {
+    if (!msalInstance) {
+        throw new Error('Not authenticated');
+    }
+    
+    const accounts = msalInstance.getAllAccounts();
+    if (accounts.length === 0) {
+        throw new Error('No account found');
+    }
+    
+    const tokenRequest = {
+        scopes: ['https://api.bap.microsoft.com/.default'],
+        account: accounts[0],
+    };
+    
     try {
-        // Try to get organization info
-        const response = await fetch(`${orgUrl}/api/data/v9.2/organizations?$select=name,organizationid`, {
-            method: 'GET',
-            headers: {
-                'Authorization': `Bearer ${accessToken}`,
-                'OData-MaxVersion': '4.0',
-                'OData-Version': '4.0',
-                'Accept': 'application/json',
-            },
-        });
-        
-        if (response.ok) {
-            const data = await response.json();
-            if (data.value && data.value.length > 0) {
-                const org = data.value[0];
-                document.getElementById('environmentName').textContent = org.name;
-                environmentId = org.organizationid;
-            }
-        }
+        const authResult = await msalInstance.acquireTokenSilent(tokenRequest);
+        return authResult.accessToken;
     } catch (error) {
-        console.warn('Could not fetch environment info:', error);
-        document.getElementById('environmentName').textContent = orgUrl;
+        console.log('Silent token acquisition failed, using popup');
+        const authResult = await msalInstance.acquireTokenPopup(tokenRequest);
+        return authResult.accessToken;
     }
 }
 
-// Load applications from the environment
-async function loadApplications() {
-    showLoading('Loading applications...', 'Fetching installed apps');
+// Get environment information
+async function getEnvironmentInfo() {
+    try {
+        // Try to get organization info from Dynamics
+        const response = await fetch(`${orgUrl}/api/data/v9.2/organ from Power Platform');
     
     const appsList = document.getElementById('appsList');
     appsList.innerHTML = `
@@ -255,41 +256,52 @@ async function loadApplications() {
     `;
     
     try {
-        // Query for installed applications (packages)
-        const response = await fetch(
-            `${orgUrl}/api/data/v9.2/msdyn_solutions?$select=msdyn_solutionid,msdyn_name,msdyn_displayname,msdyn_version,msdyn_installedon&$filter=statecode eq 0&$orderby=msdyn_displayname asc`,
-            {
-                method: 'GET',
-                headers: {
-                    'Authorization': `Bearer ${accessToken}`,
-                    'OData-MaxVersion': '4.0',
-                    'OData-Version': '4.0',
-                    'Accept': 'application/json',
-                },
-            }
-        );
+        if (!environmentId) {
+            throw new Error('Environment ID not found');
+        }
+        
+        // Get BAP token for Power Platform API
+        showLoading('Authenticating...', 'Getting Power Platform API access');
+        bapToken = await getBAPToken();
+        console.log('BAP token acquired');
+        
+        // Query installed applications using Power Platform API
+        showLoading('Loading applications...', 'Querying installed applications');
+        const url = `https://api.bap.microsoft.com/providers/Microsoft.BusinessAppPlatform/scopes/admin/environments/${environmentId}/applicationPackages?api-version=2022-03-01-preview`;
+        
+        console.log('Fetching from:', url);
+        
+        const response = await fetch(url, {
+            method: 'GET',
+            headers: {
+                'Authorization': `Bearer ${bapToken}`,
+                'Accept': 'application/json',
+            },
+        });
         
         if (!response.ok) {
-            // Try alternative approach - query publishers
-            return await loadApplicationsAlternative();
+            const errorText = await response.text();
+            console.error('API Error:', response.status, errorText);
+            throw new Error(`Failed to fetch applications: ${response.status} - ${errorText}`);
         }
         
         const data = await response.json();
-        apps = data.value || [];
+        console.log('Apps data:', data);
         
-        // Check for updates for each app (simulated - in reality you'd need to query available updates)
-        // For demo: Use a deterministic approach based on app ID so results are consistent
-        apps = apps.map(app => {
-            const appId = app.msdyn_solutionid || app.solutionid || '';
-            // Use hash of first char to determine if update is available (consistent results)
-            const hasUpdate = appId.length > 0 && parseInt(appId[0], 16) % 3 === 0;
-            return {
-                ...app,
-                hasUpdate: hasUpdate,
-                latestVersion: app.msdyn_version || app.version ? 
-                    incrementVersion(app.msdyn_version || app.version) : '1.0.0.1'
-            };
-        });
+        apps = (data.value || []).map(app => ({
+            id: app.id || app.applicationId,
+            name: app.properties?.displayName || app.properties?.applicationUniqueName || app.name,
+            version: app.properties?.applicationVersion || 'Unknown',
+            installedOn: app.properties?.createdTime,
+            publisher: app.properties?.publisherName || 'Microsoft',
+            hasUpdate: false, // Will check for updates
+            latestVersion: app.properties?.applicationVersion || 'Unknown',
+            updateAvailable: null
+        }));
+        
+        // Check for available updates for each app
+        showLoading('Checking for updates...', `Checking ${apps.length} applications`);
+        await checkForUpdates();
         
         displayApplications();
         hideLoading();
@@ -300,18 +312,50 @@ async function loadApplications() {
         appsList.innerHTML = `
             <div class="alert alert-danger">
                 <i class="fas fa-exclamation-triangle"></i> 
-                Failed to load applications: ${error.message}
+                <strong>Failed to load applications</strong><br>
+                ${error.message}<br><br>
+                <small>Make sure you have the correct permissions and that Power Platform Admin API access is configured.</small>
             </div>
         `;
     }
 }
 
-// Alternative method to load applications (using solutions)
-async function loadApplicationsAlternative() {
-    try {
-        const response = await fetch(
-            `${orgUrl}/api/data/v9.2/solutions?$select=solutionid,friendlyname,version,installedon,publisherid&$filter=ismanaged eq true and isvisible eq true&$orderby=friendlyname asc`,
-            {
+// Check for available updates for all apps
+async function checkForUpdates() {
+    // For now, query the catalog for each app to see if newer version exists
+    // This is a simplified approach - real implementation may need to use different APIs
+    
+    for (let i = 0; i < apps.length; i++) {
+        const app = apps[i];
+        try {
+            // Check if there's a newer version available
+            // Note: This API endpoint may need adjustment based on actual Power Platform APIs
+            const updateUrl = `https://api.bap.microsoft.com/providers/Microsoft.BusinessAppPlatform/applicationPackages?api-version=2022-03-01-preview&$filter=applicationUniqueName eq '${app.name}'`;
+            
+            const response = await fetch(updateUrl, {
+                method: 'GET',
+                headers: {
+                    'Authorization': `Bearer ${bapToken}`,
+                    'Accept': 'application/json',
+                },
+            });
+            
+            if (response.ok) {
+                const catalogData = await response.json();
+                if (catalogData.value && catalogData.value.length > 0) {
+                    const latestInCatalog = catalogData.value[0];
+                    const latestVersion = latestInCatalog.properties?.applicationVersion;
+                    
+                    if (latestVersion && latestVersion !== app.version) {
+                        app.hasUpdate = true;
+                        app.latestVersion = latestVersion;
+                        app.updateAvailable = latestInCatalog;
+                    }
+                }
+            }
+        } catch (error) {
+            console.warn(`Could not check update for ${app.name}:`, error);
+        }
                 method: 'GET',
                 headers: {
                     'Authorization': `Bearer ${accessToken}`,
@@ -353,22 +397,9 @@ function displayApplications() {
         appsList.innerHTML = `
             <div class="text-center py-5">
                 <i class="fas fa-inbox fa-3x text-muted mb-3"></i>
-                <p class="text-muted">No applications found in this environment.</p>
-            </div>
-        `;
-        return;
-    }
-    
-    const appsWithUpdates = apps.filter(app => app.hasUpdate);
-    document.getElementById('updateCount').textContent = appsWithUpdates.length;
-    document.getElementById('updateAllBtn').disabled = appsWithUpdates.length === 0;
-    
-    let html = '';
-    
-    apps.forEach(app => {
-        const appName = app.msdyn_displayname || app.msdyn_name || 'Unknown App';
-        const currentVersion = app.msdyn_version || '1.0.0.0';
-        const installedDate = app.msdyn_installedon ? new Date(app.msdyn_installedon).toLocaleDateString() : 'Unknown';
+                <p class="tename || 'Unknown App';
+        const currentVersion = app.version || '1.0.0.0';
+        const installedDate = app.installedOn ? new Date(app.installedOn).toLocaleDateString() : 'Unknown';
         
         html += `
             <div class="app-card">
@@ -381,6 +412,19 @@ function displayApplications() {
                             <i class="fas fa-tag"></i> Current: ${escapeHtml(currentVersion)}
                             ${app.hasUpdate ? `<br><i class="fas fa-arrow-up text-success"></i> Available: <strong>${escapeHtml(app.latestVersion)}</strong>` : ''}
                         </div>
+                        <div class="text-muted small mt-1">
+                            <i class="fas fa-calendar"></i> Installed: ${installedDate}
+                        </div>
+                    </div>
+                    <div class="col-md-3">
+                        ${app.hasUpdate ? 
+                            '<span class="badge-update"><i class="fas fa-arrow-circle-up"></i> Update Available</span>' : 
+                            '<span class="badge-current"><i class="fas fa-check-circle"></i> Up to Date</span>'
+                        }
+                    </div>
+                    <div class="col-md-3 text-end">
+                        ${app.hasUpdate ? 
+                            `<button class="btn btn-success" onclick="updateSingleApp('${app.
                         <div class="text-muted small mt-1">
                             <i class="fas fa-calendar"></i> Installed: ${installedDate}
                         </div>
@@ -411,38 +455,113 @@ function displayApplications() {
 
 // Update a single app
 async function updateSingleApp(appId) {
-    const app = apps.find(a => a.msdyn_solutionid === appId);
+    const app = apps.find(a => a.id === appId);
     if (!app) {
         showError('App not found');
         return;
     }
     
-    const appName = app.msdyn_displayname || app.msdyn_name;
+    const appName = app.name;
     
-    if (!confirm(`Update ${appName} to version ${app.latestVersion}?`)) {
+    if (!confirm(`Update ${appName} to version ${app.latestVersion}?\n\nThis will trigger a real update in your Power Platform environment.`)) {
         return;
     }
     
-    showLoading('Updating...', `Updating ${appName}`);
+    showLoading('Updating...', `Installing ${appName}`);
     
     try {
-        // Simulate update process
-        // In a real implementation, you would call the Power Platform API to trigger the update
-        await simulateUpdate(appId, appName);
+        // Trigger the actual update using Power Platform API
+        const installUrl = `https://api.bap.microsoft.com/providers/Microsoft.BusinessAppPlatform/scopes/admin/environments/${environmentId}/applicationPackages/${appId}/install?api-version=2022-03-01-preview`;
         
-        // Mark as updated
-        app.hasUpdate = false;
-        app.msdyn_version = app.latestVersion;
+        console.log('Triggering update for:', appName);
+        console.log('Install URL:', installUrl);
         
-        hideLoading();
-        displayApplications();
-        showSuccess(`${appName} updated successfully!`);
+        const response = await fetch(installUrl, {
+            method: 'POST',
+            headers: {
+                'Authorization': `Bearer ${bapToken}`,
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+                version: app.latestVersion
+            })
+        });
         
-    } catch (error) {
-        hideLoading();
-        console.error('Update error:', error);
-        showError(`Failed to update ${appName}: ${error.message}`);
+        if (!response.ok) {
+            const errorText = await response.text();
+            console.error('Update failed:', response.status, errorText);
+            throw new Error(`Update failed: ${response.status} - ${errorText}`);
+        }
+        
+        const operation = await response.json();
+        console.log('Update operation started:', operation);
+        
+        // Poll for completion
+        if (operation.id || operation.name) {
+            await pollUpdateStatus(operation.id || operation.name\n\nThis will trigger REAL updates in your Power Platform environment. This may take several minutes.`)) {
+        return;
     }
+    
+    showLoading('Updating all apps...', 'This may take several minutes');
+    
+    let successCount = 0;
+    let failCount = 0;
+    const errors = [];
+    
+    for (let i = 0; i < appsToUpdate.length; i++) {
+        const app = appsToUpdate[i];
+        const appName = app.name;
+        
+        document.getElementById('loadingDetails').textContent = 
+            `Updating ${i + 1} of ${appsToUpdate.length}: ${appName}`;
+        
+        try {
+            const installUrl = `https://api.bap.microsoft.com/providers/Microsoft.BusinessAppPlatform/scopes/admin/environments/${environmentId}/applicationPackages/${app.id}/install?api-version=2022-03-01-preview`;
+            
+            const response = await fetch(installUrl, {
+                method: 'POST',
+                headers: {
+                    'Authorization': `Bearer ${bapToken}`,
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    version: app.latestVersion
+                })
+            });
+            
+            if (!response.ok) {
+                throw new Error(`HTTP ${response.status}`);
+            }
+            
+            const operation = await response.json();
+            
+            // Wait for completion (with timeout)
+            if (operation.id || operation.name) {
+                await pollUpdateStatus(operation.id || operation.name, appName, 30); // Shorter timeout for batch
+            }
+            
+            app.hasUpdate = false;
+            app.version = app.latestVersion;
+            successCount++;
+            
+        } catch (error) {
+            console.error(`Failed to update ${appName}:`, error);
+            errors.push(`${appName}: ${error.message}`);
+            failCount++;
+        }
+    }
+    
+    hideLoading();
+    displayApplications();
+    
+    if (failCount === 0) {
+        showSuccess(`All ${successCount} applications updated successfully!`);
+    } else {
+        const errorDetails = errors.length > 0 ? '\n\nErrors:\n' + errors.slice(0, 5).join('\n') : '';
+        showError(`Updated ${successCount} apps. ${failCount} failed.${errorDetails}`
+    }
+    
+    throw new Error('Update timeout - operation took too long');
 }
 
 // Update all apps
