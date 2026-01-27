@@ -359,12 +359,14 @@ function displayApplications() {
         html += '</div>';
         html += '<div class="col-md-3 text-end">';
         if (app.hasUpdate) {
+            // Show Update button only when we detect an update is available
             html += '<button class="btn btn-success btn-sm" onclick="updateSingleApp(\'' + escapeHtml(app.uniqueName) + '\')"><i class="fas fa-download"></i> Update</button>';
         } else if (!app.instancePackageId) {
+            // Show Install button for apps not installed
             html += '<button class="btn btn-primary btn-sm" onclick="installApp(\'' + escapeHtml(app.uniqueName) + '\')"><i class="fas fa-plus"></i> Install</button>';
         } else {
-            // Show update button for installed apps
-            html += '<button class="btn btn-primary btn-sm" onclick="reinstallApp(\'' + escapeHtml(app.uniqueName) + '\')"><i class="fas fa-download"></i> Update</button>';
+            // Installed and up to date - show checkmark
+            html += '<span class="text-success"><i class="fas fa-check-circle"></i> Up to date</span>';
         }
         html += '</div>';
         html += '</div>';
