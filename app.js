@@ -202,17 +202,31 @@ async function loadApplications() {
         }
         
         const data = await response.json();
-        console.log('Apps response:', data.value?.length, 'apps');
-        
-        // Separate installed apps from catalog apps
         const allApps = data.value || [];
+        console.log('Apps response:', allApps.length, 'apps');
+        
+        // Debug: Log all unique states and check for update-related fields
+        const states = [...new Set(allApps.map(a => a.state))];
+        console.log('All states found:', states);
+        
+        // Check first few apps for any update-related fields
+        if (allApps.length > 0) {
+            console.log('Sample app fields:', Object.keys(allApps[0]));
+            // Look for installed apps that might have update info
+            const sampleInstalled = allApps.find(a => a.state === 'Installed');
+            if (sampleInstalled) {
+                console.log('Sample installed app:', JSON.stringify(sampleInstalled, null, 2));
+            }
+        }
+        
+        // Separate installed apps from catalog apps (include all non-installed states as catalog)
         const installedApps = allApps.filter(a => a.state === 'Installed' || a.instancePackageId);
-        const catalogApps = allApps.filter(a => a.state === 'None' || a.state === 'InstallAvailable');
+        const catalogApps = allApps.filter(a => a.state !== 'Installed' && !a.instancePackageId);
         
         console.log('Installed apps:', installedApps.length);
-        console.log('Catalog apps:', catalogApps.length);
+        console.log('Catalog apps (available):', catalogApps.length);
         
-        // Build a map of catalog apps by applicationId (keep the highest version)
+        // Build a map of ALL catalog apps by applicationId (keep the highest version)
         const catalogMap = new Map();
         for (const app of catalogApps) {
             if (app.applicationId) {
@@ -223,24 +237,58 @@ async function loadApplications() {
             }
         }
         
+        // Also build a map by uniqueName for apps that share the same base name
+        const catalogByName = new Map();
+        for (const app of catalogApps) {
+            if (app.uniqueName) {
+                const baseName = app.uniqueName.replace(/_upgrade$/i, '').replace(/_\d+$/, '');
+                const existing = catalogByName.get(baseName);
+                if (!existing || compareVersions(app.version, existing.version) > 0) {
+                    catalogByName.set(baseName, app);
+                }
+            }
+        }
+        
         // Process installed apps and check for updates
+        let updatesFound = 0;
         apps = installedApps.map(app => {
-            const catalogVersion = catalogMap.get(app.applicationId);
             let hasUpdate = false;
             let latestVersion = null;
             let catalogUniqueName = null;
             
-            // Check if there's a newer version in the catalog
+            // Method 1: Check by applicationId
+            const catalogVersion = catalogMap.get(app.applicationId);
             if (catalogVersion && compareVersions(catalogVersion.version, app.version) > 0) {
                 hasUpdate = true;
                 latestVersion = catalogVersion.version;
                 catalogUniqueName = catalogVersion.uniqueName;
             }
             
+            // Method 2: Check by uniqueName base (in case applicationId doesn't match)
+            if (!hasUpdate && app.uniqueName) {
+                const baseName = app.uniqueName.replace(/_upgrade$/i, '').replace(/_\d+$/, '');
+                const byName = catalogByName.get(baseName);
+                if (byName && compareVersions(byName.version, app.version) > 0) {
+                    hasUpdate = true;
+                    latestVersion = byName.version;
+                    catalogUniqueName = byName.uniqueName;
+                }
+            }
+            
+            // Method 3: Check if the API directly provides update info
+            if (!hasUpdate && app.updateAvailable) {
+                hasUpdate = true;
+            }
+            
+            if (hasUpdate) {
+                updatesFound++;
+                console.log('Update found for:', app.localizedName || app.uniqueName, app.version, '->', latestVersion);
+            }
+            
             return {
                 id: app.id,
                 uniqueName: app.uniqueName,
-                catalogUniqueName: catalogUniqueName, // Use catalog uniqueName for install
+                catalogUniqueName: catalogUniqueName || app.uniqueName,
                 name: app.localizedName || app.applicationName || app.uniqueName || 'Unknown',
                 version: app.version || 'Unknown',
                 latestVersion: latestVersion,
@@ -253,6 +301,8 @@ async function loadApplications() {
                 applicationId: app.applicationId
             };
         });
+        
+        console.log('Total updates found via version comparison:', updatesFound);
         
         // Also add apps from catalog that are not installed (for browse/install)
         const installedAppIds = new Set(installedApps.map(a => a.applicationId).filter(Boolean));
