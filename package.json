@@ -1,0 +1,21 @@
+{
+  "name": "d365-app-updater",
+  "version": "1.0.0",
+  "description": "Bulk update tool for D365 Power Platform applications",
+  "scripts": {
+    "start": "npx http-server -p 8000 -c-1",
+    "dev": "npx http-server -p 8000 -c-1 -o"
+  },
+  "keywords": [
+    "dynamics365",
+    "powerplatform",
+    "d365",
+    "apps",
+    "updater"
+  ],
+  "author": "Your Name",
+  "license": "MIT",
+  "devDependencies": {
+    "http-server": "^14.1.1"
+  }
+}
