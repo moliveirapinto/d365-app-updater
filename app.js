@@ -178,6 +178,19 @@ async function findEnvironment() {
     throw new Error('Could not find Power Platform environment for ' + orgUrl);
 }
 
+// Compare two version strings (e.g., "1.2.3.4" vs "1.2.3.5")
+function compareVersions(v1, v2) {
+    const parts1 = v1.split('.').map(Number);
+    const parts2 = v2.split('.').map(Number);
+    for (let i = 0; i < Math.max(parts1.length, parts2.length); i++) {
+        const p1 = parts1[i] || 0;
+        const p2 = parts2[i] || 0;
+        if (p1 > p2) return 1;
+        if (p1 < p2) return -1;
+    }
+    return 0;
+}
+
 // Load applications from Power Platform API
 async function loadApplications() {
     showLoading('Loading applications...', 'Fetching from Power Platform');
@@ -204,31 +217,91 @@ async function loadApplications() {
         const data = await response.json();
         console.log('Apps response:', data.value?.length, 'apps');
         
-        apps = (data.value || []).map(app => {
-            const state = app.state || 'None';
-            const hasUpdate = state === 'UpdateAvailable' || state === 'InstallAvailable';
+        // Separate installed apps from catalog apps
+        const allApps = data.value || [];
+        const installedApps = allApps.filter(a => a.state === 'Installed' || a.instancePackageId);
+        const catalogApps = allApps.filter(a => a.state === 'None' || a.state === 'InstallAvailable');
+        
+        console.log('Installed apps:', installedApps.length);
+        console.log('Catalog apps:', catalogApps.length);
+        
+        // Build a map of catalog apps by applicationId (keep the highest version)
+        const catalogMap = new Map();
+        for (const app of catalogApps) {
+            if (app.applicationId) {
+                const existing = catalogMap.get(app.applicationId);
+                if (!existing || compareVersions(app.version, existing.version) > 0) {
+                    catalogMap.set(app.applicationId, app);
+                }
+            }
+        }
+        
+        // Process installed apps and check for updates
+        apps = installedApps.map(app => {
+            const catalogVersion = catalogMap.get(app.applicationId);
+            let hasUpdate = false;
+            let latestVersion = null;
+            let catalogUniqueName = null;
+            
+            // Check if there's a newer version in the catalog
+            if (catalogVersion && compareVersions(catalogVersion.version, app.version) > 0) {
+                hasUpdate = true;
+                latestVersion = catalogVersion.version;
+                catalogUniqueName = catalogVersion.uniqueName;
+            }
             
             return {
                 id: app.id,
                 uniqueName: app.uniqueName,
+                catalogUniqueName: catalogUniqueName, // Use catalog uniqueName for install
                 name: app.localizedName || app.applicationName || app.uniqueName || 'Unknown',
                 version: app.version || 'Unknown',
-                latestVersion: app.lastAvailableVersion || null,
-                state: state,
+                latestVersion: latestVersion,
+                state: app.state || 'Installed',
                 hasUpdate: hasUpdate,
                 publisher: app.publisherName || 'Microsoft',
                 description: app.applicationDescription || '',
                 learnMoreUrl: app.learnMoreUrl || null,
-                instancePackageId: app.instancePackageId
+                instancePackageId: app.instancePackageId,
+                applicationId: app.applicationId
             };
         });
         
-        // Sort: updates first, then alphabetically
+        // Also add apps from catalog that are not installed (for browse/install)
+        const installedAppIds = new Set(installedApps.map(a => a.applicationId).filter(Boolean));
+        const notInstalledApps = [];
+        for (const [appId, app] of catalogMap) {
+            if (!installedAppIds.has(appId)) {
+                notInstalledApps.push({
+                    id: app.id,
+                    uniqueName: app.uniqueName,
+                    catalogUniqueName: app.uniqueName,
+                    name: app.localizedName || app.applicationName || app.uniqueName || 'Unknown',
+                    version: app.version || 'Unknown',
+                    latestVersion: null,
+                    state: 'Available',
+                    hasUpdate: false,
+                    publisher: app.publisherName || 'Microsoft',
+                    description: app.applicationDescription || '',
+                    learnMoreUrl: app.learnMoreUrl || null,
+                    instancePackageId: null,
+                    applicationId: app.applicationId
+                });
+            }
+        }
+        
+        console.log('Apps with updates:', apps.filter(a => a.hasUpdate).length);
+        
+        // Sort: updates first, then installed, then available - all alphabetically
         apps.sort((a, b) => {
             if (a.hasUpdate && !b.hasUpdate) return -1;
             if (!a.hasUpdate && b.hasUpdate) return 1;
             return a.name.localeCompare(b.name);
         });
+        
+        // Store not-installed apps for browsing (sorted alphabetically)
+        notInstalledApps.sort((a, b) => a.name.localeCompare(b.name));
+        window.availableApps = notInstalledApps;
         
         displayApplications();
         hideLoading();
@@ -300,14 +373,18 @@ async function updateSingleApp(uniqueName) {
     const app = apps.find(a => a.uniqueName === uniqueName);
     if (!app) return;
     
-    if (!confirm('Install update for "' + app.name + '"?')) {
+    if (!confirm('Install update for "' + app.name + '"?\n\nCurrent: ' + app.version + '\nNew: ' + app.latestVersion)) {
         return;
     }
     
     showLoading('Installing update...', app.name);
     
     try {
-        const url = `https://api.powerplatform.com/appmanagement/environments/${environmentId}/applicationPackages/${app.uniqueName}/install?api-version=2022-03-01-preview`;
+        // Use the catalog's uniqueName if available (for updates), otherwise use the installed app's uniqueName
+        const installUniqueName = app.catalogUniqueName || app.uniqueName;
+        const url = `https://api.powerplatform.com/appmanagement/environments/${environmentId}/applicationPackages/${installUniqueName}/install?api-version=2022-03-01-preview`;
+        
+        console.log('Installing update:', installUniqueName, 'for', app.name);
         
         const response = await fetch(url, {
             method: 'POST',
@@ -396,7 +473,11 @@ async function updateAllApps() {
         document.getElementById('loadingDetails').textContent = (i + 1) + ' of ' + appsToUpdate.length + ': ' + app.name;
         
         try {
-            const url = `https://api.powerplatform.com/appmanagement/environments/${environmentId}/applicationPackages/${app.uniqueName}/install?api-version=2022-03-01-preview`;
+            // Use the catalog's uniqueName if available (for updates), otherwise use the installed app's uniqueName
+            const installUniqueName = app.catalogUniqueName || app.uniqueName;
+            const url = `https://api.powerplatform.com/appmanagement/environments/${environmentId}/applicationPackages/${installUniqueName}/install?api-version=2022-03-01-preview`;
+            
+            console.log('Updating:', app.name, 'using package:', installUniqueName);
             
             const response = await fetch(url, {
                 method: 'POST',
