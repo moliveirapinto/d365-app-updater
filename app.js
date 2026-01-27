@@ -320,7 +320,7 @@ function displayApplications() {
     
     const appsWithUpdates = apps.filter(a => a.hasUpdate);
     const installedApps = apps.filter(a => a.instancePackageId);
-    document.getElementById('updateCount').textContent = installedApps.length;
+    document.getElementById('appCountText').textContent = installedApps.length + ' apps installed';
     document.getElementById('updateAllBtn').disabled = appsWithUpdates.length === 0;
     
     // Show installed apps
@@ -329,13 +329,11 @@ function displayApplications() {
     
     let html = '';
     
-    // Add info message about installed apps
+    // Add info message
     if (installedOrUpdatable.length > 0) {
-        html += '<div class="alert alert-warning mb-3">';
-        html += '<i class="fas fa-info-circle me-2"></i>';
-        html += '<strong>' + installedOrUpdatable.length + ' installed apps.</strong> ';
-        html += 'Click <strong>"Update All Apps"</strong> to apply all available updates at once, ';
-        html += 'or click <strong>"Update"</strong> on individual apps.';
+        html += '<div class="alert alert-success mb-3">';
+        html += '<i class="fas fa-check-circle me-2"></i>';
+        html += 'Click <strong>"Update All Apps"</strong> to apply any available updates, or update apps individually.';
         html += '</div>';
     }
     
