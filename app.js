@@ -252,7 +252,37 @@ async function getBAPToken() {
 async function getEnvironmentInfo() {
     try {
         // Try to get organization info from Dynamics
-        const response = await fetch(`${orgUrl}/api/data/v9.2/organ from Power Platform');
+        const response = await fetch(`${orgUrl}/api/data/v9.2/organizations?$select=name,organizationid`, {
+            method: 'GET',
+            headers: {
+                'Authorization': `Bearer ${accessToken}`,
+                'OData-MaxVersion': '4.0',
+                'OData-Version': '4.0',
+                'Accept': 'application/json',
+            },
+        });
+        
+        if (response.ok) {
+            const data = await response.json();
+            if (data.value && data.value.length > 0) {
+                const org = data.value[0];
+                document.getElementById('environmentName').textContent = org.name;
+                environmentId = org.organizationid;
+                
+                console.log('Environment ID:', environmentId);
+                return;
+            }
+        }
+    } catch (error) {
+        console.warn('Could not fetch environment info:', error);
+    }
+    
+    document.getElementById('environmentName').textContent = orgUrl;
+}
+
+// Load applications from the environment
+async function loadApplications() {
+    showLoading('Loading applications...', 'Fetching installed apps from Power Platform');
     
     const appsList = document.getElementById('appsList');
     appsList.innerHTML = `
