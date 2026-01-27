@@ -333,10 +333,9 @@ function displayApplications() {
     if (installedOrUpdatable.length > 0) {
         html += '<div class="alert alert-warning mb-3">';
         html += '<i class="fas fa-info-circle me-2"></i>';
-        html += '<strong>' + installedOrUpdatable.length + ' installed apps found.</strong> ';
-        html += 'The Power Platform API does not expose update availability. ';
-        html += 'Use <strong>"Reinstall All"</strong> to apply any available updates to all apps, or click <strong>"Reinstall"</strong> on individual apps. ';
-        html += 'Apps already at the latest version will remain unchanged.';
+        html += '<strong>' + installedOrUpdatable.length + ' installed apps.</strong> ';
+        html += 'Click <strong>"Update All Apps"</strong> to apply all available updates at once, ';
+        html += 'or click <strong>"Update"</strong> on individual apps.';
         html += '</div>';
     }
     
@@ -366,8 +365,8 @@ function displayApplications() {
         } else if (!app.instancePackageId) {
             html += '<button class="btn btn-primary btn-sm" onclick="installApp(\'' + escapeHtml(app.uniqueName) + '\')"><i class="fas fa-plus"></i> Install</button>';
         } else {
-            // Show reinstall button for installed apps
-            html += '<button class="btn btn-outline-primary btn-sm" onclick="reinstallApp(\'' + escapeHtml(app.uniqueName) + '\')"><i class="fas fa-sync"></i> Reinstall</button>';
+            // Show update button for installed apps
+            html += '<button class="btn btn-primary btn-sm" onclick="reinstallApp(\'' + escapeHtml(app.uniqueName) + '\')"><i class="fas fa-download"></i> Update</button>';
         }
         html += '</div>';
         html += '</div>';
@@ -459,21 +458,21 @@ async function installApp(uniqueName) {
     }
 }
 
-// Reinstall an already installed app (to apply any available updates)
+// Update an installed app
 async function reinstallApp(uniqueName) {
     const app = apps.find(a => a.uniqueName === uniqueName);
     if (!app) return;
     
-    if (!confirm('Reinstall "' + app.name + '"?\n\nThis will check for and apply any available updates.\n\nCurrent version: ' + app.version)) {
+    if (!confirm('Update "' + app.name + '"?\n\nCurrent version: ' + app.version)) {
         return;
     }
     
-    showLoading('Reinstalling...', app.name);
+    showLoading('Updating...', app.name);
     
     try {
         const url = `https://api.powerplatform.com/appmanagement/environments/${environmentId}/applicationPackages/${app.uniqueName}/install?api-version=2022-03-01-preview`;
         
-        console.log('Reinstalling:', app.name, 'using package:', app.uniqueName);
+        console.log('Updating:', app.name);
         
         const response = await fetch(url, {
             method: 'POST',
@@ -485,18 +484,18 @@ async function reinstallApp(uniqueName) {
         
         if (!response.ok) {
             const errorText = await response.text();
-            throw new Error('Reinstall failed: ' + response.status + ' - ' + errorText);
+            throw new Error('Update failed: ' + response.status + ' - ' + errorText);
         }
         
         hideLoading();
-        alert('Reinstall/update started for ' + app.name + '!\n\nThe system will apply any available updates. This may take several minutes.');
+        alert('Update started for ' + app.name + '!\n\nThis may take several minutes.');
         
         await loadApplications();
         
     } catch (error) {
         hideLoading();
-        console.error('Reinstall error:', error);
-        showError('Failed to reinstall: ' + error.message);
+        console.error('Update error:', error);
+        showError('Failed to update: ' + error.message);
     }
 }
 
@@ -563,7 +562,7 @@ async function updateAllApps() {
     await loadApplications();
 }
 
-// Reinstall all installed apps
+// Update all installed apps
 async function reinstallAllApps() {
     const installedApps = apps.filter(a => a.instancePackageId);
     
@@ -572,11 +571,11 @@ async function reinstallAllApps() {
         return;
     }
     
-    if (!confirm('Reinstall all ' + installedApps.length + ' installed applications?\n\nThis will trigger update checks for each installed app.\nApps that are already current will remain unchanged.\n\nThis operation may take several minutes.')) {
+    if (!confirm('Update all ' + installedApps.length + ' installed apps?\n\nThis will apply available updates to all apps.')) {
         return;
     }
     
-    showLoading('Reinstalling apps...', '0 of ' + installedApps.length);
+    showLoading('Updating apps...', '0 of ' + installedApps.length);
     
     let successCount = 0;
     let failCount = 0;
@@ -588,7 +587,7 @@ async function reinstallAllApps() {
         try {
             const url = `https://api.powerplatform.com/appmanagement/environments/${environmentId}/applicationPackages/${app.uniqueName}/install?api-version=2022-03-01-preview`;
             
-            console.log('Reinstalling:', app.name, 'using package:', app.uniqueName);
+            console.log('Updating:', app.name);
             
             const response = await fetch(url, {
                 method: 'POST',
@@ -602,11 +601,11 @@ async function reinstallAllApps() {
                 successCount++;
             } else {
                 failCount++;
-                console.error('Failed to reinstall ' + app.name + ':', response.status);
+                console.error('Failed to update ' + app.name + ':', response.status);
             }
         } catch (error) {
             failCount++;
-            console.error('Error reinstalling ' + app.name + ':', error);
+            console.error('Error updating ' + app.name + ':', error);
         }
         
         // Small delay between requests to avoid rate limiting
@@ -616,9 +615,9 @@ async function reinstallAllApps() {
     hideLoading();
     
     if (failCount === 0) {
-        alert('All ' + successCount + ' reinstall requests submitted successfully!\n\nUpdates are running in the background and may take several minutes.\n\nCheck the Power Platform Admin Center for progress.');
+        alert('All ' + successCount + ' update requests submitted!\n\nUpdates are running in the background and may take several minutes.');
     } else {
-        alert('Submitted ' + successCount + ' reinstall requests.\n' + failCount + ' failed.\n\nCheck the Power Platform Admin Center for details.');
+        alert('Submitted ' + successCount + ' updates.\n' + failCount + ' failed.\n\nCheck the Power Platform Admin Center for details.');
     }
     
     await loadApplications();
