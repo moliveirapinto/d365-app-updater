@@ -139,16 +139,18 @@
 
                 <form id="authForm">
                     <div class="mb-3">
-                        <label for="orgUrl" class="form-label">
-                            <i class="fas fa-globe"></i> Organization URL
+                        <label for="environmentId" class="form-label">
+                            <i class="fas fa-fingerprint"></i> Environment ID
                         </label>
                         <input 
                             type="text" 
                             class="form-control" 
-                            id="orgUrl" 
-                            placeholder="https://yourorg.crm.dynamics.com"
+                            id="environmentId" 
+                            placeholder="b7d8c626-1720-f011-9aed-000d3a10611a"
                             required>
-                        <div class="form-text">Your Dynamics 365 organization URL</div>
+                        <div class="form-text">
+                            Find this in the Admin Center URL: <code>admin.powerplatform.microsoft.com/environments/<strong>THIS-ID</strong>/...</code>
+                        </div>
                     </div>
 
                     <div class="mb-3">

@@ -1,9 +1,7 @@
 // Global variables
 let msalInstance = null;
-let accessToken = null;
 let ppToken = null; // Power Platform API token
 let environmentId = null;
-let orgUrl = null;
 let apps = [];
 
 // MSAL Configuration
@@ -53,7 +51,7 @@ function loadSavedCredentials() {
     if (savedCreds) {
         try {
             const creds = JSON.parse(savedCreds);
-            document.getElementById('orgUrl').value = creds.orgUrl || '';
+            document.getElementById('environmentId').value = creds.environmentId || '';
             document.getElementById('tenantId').value = creds.tenantId || '';
             document.getElementById('clientId').value = creds.clientId || '';
             document.getElementById('rememberMe').checked = true;
@@ -65,21 +63,22 @@ function loadSavedCredentials() {
 async function handleAuthentication(event) {
     event.preventDefault();
     
-    const orgUrlValue = document.getElementById('orgUrl').value.trim();
+    const envIdValue = document.getElementById('environmentId').value.trim();
     const tenantId = document.getElementById('tenantId').value.trim();
     const clientId = document.getElementById('clientId').value.trim();
     const rememberMe = document.getElementById('rememberMe').checked;
     
     const guidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-    if (!guidRegex.test(tenantId) || !guidRegex.test(clientId)) {
-        showError('Invalid GUID format');
+    if (!guidRegex.test(tenantId) || !guidRegex.test(clientId) || !guidRegex.test(envIdValue)) {
+        showError('Invalid GUID format. All IDs must be valid GUIDs.');
         return;
     }
     
-    orgUrl = orgUrlValue.replace(/\/$/, '');
+    // Use the Environment ID directly
+    environmentId = envIdValue;
     
     if (rememberMe) {
-        localStorage.setItem('d365_app_updater_creds', JSON.stringify({ orgUrl, tenantId, clientId }));
+        localStorage.setItem('d365_app_updater_creds', JSON.stringify({ environmentId: envIdValue, tenantId, clientId }));
     }
     
     try {
@@ -89,38 +88,29 @@ async function handleAuthentication(event) {
         msalInstance = new msal.PublicClientApplication(msalConfig);
         await msalInstance.initialize();
         
-        // Get D365 token first
-        const accounts = msalInstance.getAllAccounts();
-        const d365Request = { scopes: [`${orgUrl}/.default`], account: accounts[0] };
-        
-        let authResult;
-        if (accounts.length > 0) {
-            try {
-                authResult = await msalInstance.acquireTokenSilent(d365Request);
-            } catch (e) {
-                authResult = await msalInstance.acquireTokenPopup(d365Request);
-            }
-        } else {
-            authResult = await msalInstance.acquireTokenPopup(d365Request);
-        }
-        accessToken = authResult.accessToken;
-        
         // Get Power Platform API token
         showLoading('Authenticating...', 'Getting Power Platform API access');
-        const ppRequest = { scopes: ['https://api.powerplatform.com/.default'], account: msalInstance.getAllAccounts()[0] };
-        try {
-            const ppResult = await msalInstance.acquireTokenSilent(ppRequest);
-            ppToken = ppResult.accessToken;
-        } catch (e) {
-            const ppResult = await msalInstance.acquireTokenPopup(ppRequest);
-            ppToken = ppResult.accessToken;
+        const accounts = msalInstance.getAllAccounts();
+        const ppRequest = { scopes: ['https://api.powerplatform.com/.default'], account: accounts[0] };
+        
+        let ppResult;
+        if (accounts.length > 0) {
+            try {
+                ppResult = await msalInstance.acquireTokenSilent(ppRequest);
+            } catch (e) {
+                ppResult = await msalInstance.acquireTokenPopup(ppRequest);
+            }
+        } else {
+            ppResult = await msalInstance.acquireTokenPopup(ppRequest);
         }
+        ppToken = ppResult.accessToken;
         
         console.log('Power Platform API token acquired');
+        console.log('Using Environment ID:', environmentId);
         
-        // Get environment ID from BAP API
-        showLoading('Loading...', 'Finding your environment');
-        await findEnvironment();
+        // Get environment name from BAP API (optional, just for display)
+        showLoading('Loading...', 'Getting environment details');
+        await getEnvironmentName();
         
         hideLoading();
         
@@ -136,9 +126,9 @@ async function handleAuthentication(event) {
     }
 }
 
-// Find the Power Platform environment matching the org URL
-async function findEnvironment() {
-    // First get BAP token to list environments
+// Get environment name from BAP API (for display purposes)
+async function getEnvironmentName() {
+    // First get BAP token
     const bapRequest = { scopes: ['https://api.bap.microsoft.com/.default'], account: msalInstance.getAllAccounts()[0] };
     let bapToken;
     try {
@@ -149,64 +139,21 @@ async function findEnvironment() {
         bapToken = bapResult.accessToken;
     }
     
-    const response = await fetch('https://api.bap.microsoft.com/providers/Microsoft.BusinessAppPlatform/scopes/admin/environments?api-version=2021-04-01', {
+    // Get environment details by ID
+    const response = await fetch(`https://api.bap.microsoft.com/providers/Microsoft.BusinessAppPlatform/scopes/admin/environments/${environmentId}?api-version=2021-04-01`, {
         headers: { 'Authorization': `Bearer ${bapToken}` }
     });
     
-    if (!response.ok) {
-        throw new Error('Failed to get environments: ' + response.status);
+    if (response.ok) {
+        const env = await response.json();
+        const displayName = env.properties?.displayName || environmentId;
+        document.getElementById('environmentName').textContent = displayName;
+        console.log('Environment:', displayName);
+    } else {
+        // If we can't get the name, just use the ID
+        document.getElementById('environmentName').textContent = environmentId;
+        console.log('Could not get environment name, using ID');
     }
-    
-    const data = await response.json();
-    console.log('Total environments:', data.value?.length);
-    
-    // Find ALL environments matching our org URL
-    const orgHost = new URL(orgUrl).hostname.toLowerCase();
-    const matchingEnvs = [];
-    
-    for (const env of data.value || []) {
-        const instanceUrl = env.properties?.linkedEnvironmentMetadata?.instanceUrl;
-        if (instanceUrl) {
-            const envHost = new URL(instanceUrl).hostname.toLowerCase();
-            if (envHost === orgHost) {
-                matchingEnvs.push({
-                    id: env.name,
-                    displayName: env.properties?.displayName || env.name,
-                    type: env.properties?.environmentSku || 'Unknown',
-                    state: env.properties?.states?.runtime?.runtimeReasonCode || 'Unknown',
-                    createdTime: env.properties?.createdTime
-                });
-            }
-        }
-    }
-    
-    console.log('Matching environments:', matchingEnvs.length);
-    matchingEnvs.forEach(e => console.log('  -', e.displayName, '(' + e.id + ')'));
-    
-    if (matchingEnvs.length === 0) {
-        throw new Error('Could not find Power Platform environment for ' + orgUrl);
-    }
-    
-    // If multiple environments match, let user choose
-    if (matchingEnvs.length > 1) {
-        const choices = matchingEnvs.map((e, i) => `${i + 1}. ${e.displayName} (${e.type})`).join('\n');
-        const choice = prompt(`Multiple environments found for this org URL:\n\n${choices}\n\nEnter the number of the environment to use:`);
-        
-        if (choice && parseInt(choice) >= 1 && parseInt(choice) <= matchingEnvs.length) {
-            const selected = matchingEnvs[parseInt(choice) - 1];
-            environmentId = selected.id;
-            document.getElementById('environmentName').textContent = selected.displayName;
-            console.log('User selected environment:', selected.displayName, environmentId);
-            return;
-        } else {
-            throw new Error('Invalid selection. Please try again.');
-        }
-    }
-    
-    // Single match
-    environmentId = matchingEnvs[0].id;
-    document.getElementById('environmentName').textContent = matchingEnvs[0].displayName;
-    console.log('Found environment:', matchingEnvs[0].displayName, environmentId);
 }
 
 // Compare two version strings (e.g., "1.2.3.4" vs "1.2.3.5")
