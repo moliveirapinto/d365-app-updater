@@ -22,6 +22,17 @@ function createMsalConfig(tenantId, clientId) {
 
 // Initialize on page load
 document.addEventListener('DOMContentLoaded', function() {
+    console.log('DOM Content Loaded');
+    
+    // Check if MSAL library is loaded
+    if (typeof msal === 'undefined') {
+        console.error('MSAL library not loaded');
+        alert('Error: MSAL library failed to load. Please check your internet connection and refresh the page.');
+        return;
+    }
+    
+    console.log('MSAL library loaded successfully');
+    
     // Set redirect URI in instructions
     document.getElementById('redirectUri').textContent = window.location.origin;
     
@@ -33,6 +44,8 @@ document.addEventListener('DOMContentLoaded', function() {
     document.getElementById('logoutBtn').addEventListener('click', handleLogout);
     document.getElementById('refreshAppsBtn').addEventListener('click', loadApplications);
     document.getElementById('updateAllBtn').addEventListener('click', updateAllApps);
+    
+    console.log('App initialized successfully');
 });
 
 // Load saved credentials from localStorage
