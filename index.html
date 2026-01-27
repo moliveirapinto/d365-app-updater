@@ -153,7 +153,7 @@
 
                     <div class="mb-3">
                         <label for="tenantId" class="form-label">
-                            <i class="fas fa-building"></i> Tenant ID
+                            <i class="fas fa-building"></i> Tenant ID (Directory ID)
                         </label>
                         <input 
                             type="text" 
@@ -161,7 +161,10 @@
                             id="tenantId" 
                             placeholder="00000000-0000-0000-0000-000000000000"
                             required>
-                        <div class="form-text">Your Azure AD Tenant ID</div>
+                        <div class="form-text">
+                            Your Azure AD <strong>Tenant ID</strong> (also called Directory ID)<br>
+                            <small class="text-danger">⚠️ This is NOT the same as the Application (Client) ID below!</small>
+                        </div>
                     </div>
 
                     <div class="mb-3">
@@ -174,7 +177,7 @@
                             id="clientId" 
                             placeholder="00000000-0000-0000-0000-000000000000"
                             required>
-                        <div class="form-text">Your Azure AD App Registration Client ID</div>
+                        <div class="form-text">Your Azure AD App Registration <strong>Client ID</strong></div>
                     </div>
 
                     <div class="mb-3 form-check">

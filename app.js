@@ -83,6 +83,23 @@ async function handleAuthentication(event) {
     const clientId = document.getElementById('clientId').value.trim();
     const rememberMe = document.getElementById('rememberMe').checked;
     
+    // Validate GUIDs
+    const guidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    if (!guidRegex.test(tenantId)) {
+        showError('Tenant ID must be a valid GUID (e.g., 12345678-1234-1234-1234-123456789abc)');
+        return;
+    }
+    if (!guidRegex.test(clientId)) {
+        showError('Client ID must be a valid GUID (e.g., 12345678-1234-1234-1234-123456789abc)');
+        return;
+    }
+    
+    // Check if user accidentally swapped Tenant ID and Client ID
+    if (tenantId === clientId) {
+        showError('Tenant ID and Client ID cannot be the same. Please check your Azure AD app registration.');
+        return;
+    }
+    
     // Validate and clean org URL
     if (!orgUrlValue.startsWith('https://')) {
         showError('Organization URL must start with https://');
@@ -159,6 +176,16 @@ async function handleAuthentication(event) {
             errorMessage = 'App must be configured as Single-Page Application (SPA) in Azure AD. Check setup instructions below.';
         } else if (error.message.includes('AADSTS500113')) {
             errorMessage = 'Redirect URI not configured. Add ' + window.location.origin + ' to your Azure AD app registration.';
+        } else if (error.message.includes('endpoints_resolution_error') || error.message.includes('openid_config_error')) {
+            errorMessage = '❌ Invalid Tenant ID!\n\n' +
+                          'The Tenant ID you entered appears to be invalid or you may have entered the Client ID instead.\n\n' +
+                          '✓ Tenant ID = Directory (tenant) ID from Azure AD Overview\n' +
+                          '✗ Do NOT use the Application (client) ID here\n\n' +
+                          'To find your Tenant ID:\n' +
+                          '1. Go to Azure Portal → Azure Active Directory\n' +
+                          '2. Click "Overview"\n' +
+                          '3. Copy the "Tenant ID" (Directory ID)\n\n' +
+                          'Current tenant ID you entered: ' + document.getElementById('tenantId').value;
         }
         
         showError(errorMessage);
