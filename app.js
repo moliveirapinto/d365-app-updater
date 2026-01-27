@@ -278,12 +278,18 @@ async function loadApplications() {
         apps = data.value || [];
         
         // Check for updates for each app (simulated - in reality you'd need to query available updates)
-        // For now, we'll mark some as having updates available randomly for demo
-        apps = apps.map(app => ({
-            ...app,
-            hasUpdate: Math.random() > 0.7, // Simulate 30% have updates
-            latestVersion: app.msdyn_version ? incrementVersion(app.msdyn_version) : '1.0.0.1'
-        }));
+        // For demo: Use a deterministic approach based on app ID so results are consistent
+        apps = apps.map(app => {
+            const appId = app.msdyn_solutionid || app.solutionid || '';
+            // Use hash of first char to determine if update is available (consistent results)
+            const hasUpdate = appId.length > 0 && parseInt(appId[0], 16) % 3 === 0;
+            return {
+                ...app,
+                hasUpdate: hasUpdate,
+                latestVersion: app.msdyn_version || app.version ? 
+                    incrementVersion(app.msdyn_version || app.version) : '1.0.0.1'
+            };
+        });
         
         displayApplications();
         hideLoading();
@@ -488,19 +494,21 @@ async function updateAllApps() {
 // Simulate update process (replace with actual API calls)
 async function simulateUpdate(appId, appName) {
     // Simulate API call delay
-    await new Promise(resolve => setTimeout(resolve, 2000));
+    await new Promise(resolve => setTimeout(resolve, 1000));
     
-    // In a real implementation, you would:
-    // 1. Call the Power Platform API to check for updates
-    // 2. Trigger the update installation
-    // 3. Poll for update status
-    // 4. Handle success/failure
+    // ⚠️ SIMULATION ONLY - Real implementation requires:
+    // 1. Power Platform Admin API authentication
+    // 2. Query available updates from Microsoft catalog
+    // 3. Trigger update installation via Admin API
+    // 4. Poll for completion status
+    // See: https://github.com/moliveirapinto/d365-app-updater/blob/main/POWERPLATFORM_API.md
     
-    console.log(`Updating app: ${appName} (${appId})`);
+    console.log(`[SIMULATED] Updating app: ${appName} (${appId})`);
     
-    // Simulate random failures (10% chance)
-    if (Math.random() < 0.1) {
-        throw new Error('Update failed - connection timeout');
+    // Simulate deterministic failures based on app ID (consistent results)
+    const appIdNum = parseInt(appId.substring(0, 8), 16);
+    if (appIdNum % 10 === 0) {
+        throw new Error('Update failed - simulated error for demo purposes');
     }
 }
 

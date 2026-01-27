@@ -1,15 +1,27 @@
 # D365 Power Platform App Updater
 
+⚠️ **IMPORTANT: This is currently a DEMO/PROTOTYPE version with simulated data.**
+
 A web-based tool to manage and update Microsoft Dynamics 365 / Power Platform applications in bulk. This tool addresses the limitation in the Power Platform Admin Center where you can only update apps one at a time.
+
+## ⚠️ Current Status
+
+**DEMO VERSION**: The current implementation uses simulated/mock data for demonstration purposes:
+- ✅ Authentication with Azure AD works correctly
+- ✅ UI and user experience is fully functional  
+- ❌ App update detection is simulated (not reading real available updates)
+- ❌ Update installation is simulated (not actually updating apps)
+
+**To implement real functionality**, see [POWERPLATFORM_API.md](POWERPLATFORM_API.md) for detailed implementation guide.
 
 ## 🎯 Features
 
-- **Bulk App Updates**: Update all available apps at once
+- **Bulk App Updates**: Update all available apps at once (when implemented)
 - **Individual Updates**: Update specific apps one by one
-- **Authentication**: Secure MSAL-based authentication
-- **Update Detection**: Automatically detects which apps have updates available
-- **User-Friendly Interface**: Clean, modern Bootstrap UI
-- **Session Management**: Option to remember credentials
+- **Authentication**: Secure MSAL-based authentication ✅ Working
+- **Update Detection**: Automatically detects which apps have updates available (⚠️ Simulated)
+- **User-Friendly Interface**: Clean, modern Bootstrap UI ✅ Working
+- **Session Management**: Option to remember credentials ✅ Working
 
 ## 🚀 Getting Started
 
