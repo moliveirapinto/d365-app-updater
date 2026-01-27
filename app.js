@@ -158,25 +158,55 @@ async function findEnvironment() {
     }
     
     const data = await response.json();
-    console.log('Environments:', data.value?.length);
+    console.log('Total environments:', data.value?.length);
     
-    // Find environment matching our org URL
+    // Find ALL environments matching our org URL
     const orgHost = new URL(orgUrl).hostname.toLowerCase();
+    const matchingEnvs = [];
     
     for (const env of data.value || []) {
         const instanceUrl = env.properties?.linkedEnvironmentMetadata?.instanceUrl;
         if (instanceUrl) {
             const envHost = new URL(instanceUrl).hostname.toLowerCase();
             if (envHost === orgHost) {
-                environmentId = env.name;
-                document.getElementById('environmentName').textContent = env.properties?.displayName || env.name;
-                console.log('Found environment:', environmentId);
-                return;
+                matchingEnvs.push({
+                    id: env.name,
+                    displayName: env.properties?.displayName || env.name,
+                    type: env.properties?.environmentSku || 'Unknown',
+                    state: env.properties?.states?.runtime?.runtimeReasonCode || 'Unknown',
+                    createdTime: env.properties?.createdTime
+                });
             }
         }
     }
     
-    throw new Error('Could not find Power Platform environment for ' + orgUrl);
+    console.log('Matching environments:', matchingEnvs.length);
+    matchingEnvs.forEach(e => console.log('  -', e.displayName, '(' + e.id + ')'));
+    
+    if (matchingEnvs.length === 0) {
+        throw new Error('Could not find Power Platform environment for ' + orgUrl);
+    }
+    
+    // If multiple environments match, let user choose
+    if (matchingEnvs.length > 1) {
+        const choices = matchingEnvs.map((e, i) => `${i + 1}. ${e.displayName} (${e.type})`).join('\n');
+        const choice = prompt(`Multiple environments found for this org URL:\n\n${choices}\n\nEnter the number of the environment to use:`);
+        
+        if (choice && parseInt(choice) >= 1 && parseInt(choice) <= matchingEnvs.length) {
+            const selected = matchingEnvs[parseInt(choice) - 1];
+            environmentId = selected.id;
+            document.getElementById('environmentName').textContent = selected.displayName;
+            console.log('User selected environment:', selected.displayName, environmentId);
+            return;
+        } else {
+            throw new Error('Invalid selection. Please try again.');
+        }
+    }
+    
+    // Single match
+    environmentId = matchingEnvs[0].id;
+    document.getElementById('environmentName').textContent = matchingEnvs[0].displayName;
+    console.log('Found environment:', matchingEnvs[0].displayName, environmentId);
 }
 
 // Compare two version strings (e.g., "1.2.3.4" vs "1.2.3.5")
