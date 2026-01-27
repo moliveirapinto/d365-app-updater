@@ -51,7 +51,14 @@ document.addEventListener('DOMContentLoaded', function() {
     }
     
     // Event listeners
-    document.getElementById('authForm').addEventListener('submit', handleAuthentication);
+    const authForm = document.getElementById('authForm');
+    if (authForm) {
+        authForm.addEventListener('submit', handleAuthentication);
+        console.log('Auth form listener attached');
+    } else {
+        console.error('Auth form not found!');
+    }
+    
     document.getElementById('logoutBtn').addEventListener('click', handleLogout);
     document.getElementById('refreshAppsBtn').addEventListener('click', loadApplications);
     document.getElementById('updateAllBtn').addEventListener('click', updateAllApps);
@@ -78,6 +85,8 @@ function loadSavedCredentials() {
 // Handle authentication
 async function handleAuthentication(event) {
     event.preventDefault();
+    
+    console.log('Authentication started');
     
     const orgUrlValue = document.getElementById('orgUrl').value.trim();
     const tenantId = document.getElementById('tenantId').value.trim();
