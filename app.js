@@ -1,7 +1,7 @@
 // Global variables
 let msalInstance = null;
 let accessToken = null;
-let bapToken = null;
+let ppToken = null; // Power Platform API token
 let environmentId = null;
 let orgUrl = null;
 let apps = [];
@@ -104,20 +104,20 @@ async function handleAuthentication(event) {
         }
         accessToken = authResult.accessToken;
         
-        // Get BAP token for Power Platform API
+        // Get Power Platform API token
         showLoading('Authenticating...', 'Getting Power Platform API access');
-        const bapRequest = { scopes: ['https://api.bap.microsoft.com/.default'], account: msalInstance.getAllAccounts()[0] };
+        const ppRequest = { scopes: ['https://api.powerplatform.com/.default'], account: msalInstance.getAllAccounts()[0] };
         try {
-            const bapResult = await msalInstance.acquireTokenSilent(bapRequest);
-            bapToken = bapResult.accessToken;
+            const ppResult = await msalInstance.acquireTokenSilent(ppRequest);
+            ppToken = ppResult.accessToken;
         } catch (e) {
-            const bapResult = await msalInstance.acquireTokenPopup(bapRequest);
-            bapToken = bapResult.accessToken;
+            const ppResult = await msalInstance.acquireTokenPopup(ppRequest);
+            ppToken = ppResult.accessToken;
         }
         
-        console.log('BAP token acquired');
+        console.log('Power Platform API token acquired');
         
-        // Get environment ID
+        // Get environment ID from BAP API
         showLoading('Loading...', 'Finding your environment');
         await findEnvironment();
         
@@ -137,6 +137,17 @@ async function handleAuthentication(event) {
 
 // Find the Power Platform environment matching the org URL
 async function findEnvironment() {
+    // First get BAP token to list environments
+    const bapRequest = { scopes: ['https://api.bap.microsoft.com/.default'], account: msalInstance.getAllAccounts()[0] };
+    let bapToken;
+    try {
+        const bapResult = await msalInstance.acquireTokenSilent(bapRequest);
+        bapToken = bapResult.accessToken;
+    } catch (e) {
+        const bapResult = await msalInstance.acquireTokenPopup(bapRequest);
+        bapToken = bapResult.accessToken;
+    }
+    
     const response = await fetch('https://api.bap.microsoft.com/providers/Microsoft.BusinessAppPlatform/scopes/admin/environments?api-version=2021-04-01', {
         headers: { 'Authorization': `Bearer ${bapToken}` }
     });
@@ -175,13 +186,13 @@ async function loadApplications() {
     appsList.innerHTML = '<div class="text-center py-5"><div class="spinner-border text-primary"></div></div>';
     
     try {
-        // Use the correct endpoint for Dynamics 365 apps
-        const url = `https://api.bap.microsoft.com/providers/Microsoft.BusinessAppPlatform/environments/${environmentId}/applicationPackages?api-version=2016-11-01`;
+        // Use the correct Power Platform API endpoint
+        const url = `https://api.powerplatform.com/appmanagement/environments/${environmentId}/applicationPackages?api-version=2022-03-01-preview`;
         
         console.log('Fetching apps from:', url);
         
         const response = await fetch(url, {
-            headers: { 'Authorization': `Bearer ${bapToken}` }
+            headers: { 'Authorization': `Bearer ${ppToken}` }
         });
         
         if (!response.ok) {
@@ -191,20 +202,24 @@ async function loadApplications() {
         }
         
         const data = await response.json();
-        console.log('Apps response:', data);
+        console.log('Apps response:', data.value?.length, 'apps');
         
         apps = (data.value || []).map(app => {
-            const props = app.properties || {};
+            const state = app.state || 'None';
+            const hasUpdate = state === 'UpdateAvailable' || state === 'InstallAvailable';
+            
             return {
-                id: app.id || app.name,
-                uniqueName: props.uniqueName || props.applicationId || app.name,
-                name: props.localizedDisplayName || props.displayName || props.uniqueName || 'Unknown',
-                version: props.version || props.applicationVersion || 'Unknown',
-                latestVersion: props.latestVersion || null,
-                state: props.state || 'Unknown',
-                hasUpdate: props.state === 'UpdateAvailable' || (props.latestVersion && props.latestVersion !== props.version),
-                publisher: props.publisherName || props.publisherId || 'Microsoft',
-                learnMoreUrl: props.learnMoreUrl || null
+                id: app.id,
+                uniqueName: app.uniqueName,
+                name: app.localizedName || app.applicationName || app.uniqueName || 'Unknown',
+                version: app.version || 'Unknown',
+                latestVersion: app.lastAvailableVersion || null,
+                state: state,
+                hasUpdate: hasUpdate,
+                publisher: app.publisherName || 'Microsoft',
+                description: app.applicationDescription || '',
+                learnMoreUrl: app.learnMoreUrl || null,
+                instancePackageId: app.instancePackageId
             };
         });
         
@@ -238,31 +253,37 @@ function displayApplications() {
     document.getElementById('updateCount').textContent = appsWithUpdates.length;
     document.getElementById('updateAllBtn').disabled = appsWithUpdates.length === 0;
     
+    // Show only apps with updates or installed apps (not the full catalog)
+    const installedOrUpdatable = apps.filter(a => a.hasUpdate || a.instancePackageId);
+    const appsToShow = installedOrUpdatable.length > 0 ? installedOrUpdatable : apps.slice(0, 50);
+    
     let html = '';
     
-    for (const app of apps) {
+    for (const app of appsToShow) {
+        const stateClass = app.hasUpdate ? 'success' : 'secondary';
+        const stateIcon = app.hasUpdate ? 'arrow-circle-up' : 'check-circle';
+        const stateText = app.hasUpdate ? 'Update Available' : (app.instancePackageId ? 'Installed' : 'Available');
+        
         html += '<div class="app-card">';
         html += '<div class="row align-items-center">';
         html += '<div class="col-md-6">';
         html += '<div class="app-name"><i class="fas fa-cube me-2"></i>' + escapeHtml(app.name) + '</div>';
         html += '<div class="app-version mt-2">';
-        html += '<i class="fas fa-tag"></i> Installed: <strong>' + escapeHtml(app.version) + '</strong>';
+        html += '<i class="fas fa-tag"></i> Version: <strong>' + escapeHtml(app.version) + '</strong>';
         if (app.hasUpdate && app.latestVersion) {
-            html += '<br><i class="fas fa-arrow-up text-success"></i> Available: <strong class="text-success">' + escapeHtml(app.latestVersion) + '</strong>';
+            html += ' → <strong class="text-success">' + escapeHtml(app.latestVersion) + '</strong>';
         }
         html += '</div>';
         html += '<div class="text-muted small mt-1"><i class="fas fa-building"></i> ' + escapeHtml(app.publisher) + '</div>';
         html += '</div>';
         html += '<div class="col-md-3 text-center">';
-        if (app.hasUpdate) {
-            html += '<span class="badge-update"><i class="fas fa-arrow-circle-up"></i> Update Available</span>';
-        } else {
-            html += '<span class="badge-current"><i class="fas fa-check-circle"></i> Up to Date</span>';
-        }
+        html += '<span class="badge bg-' + stateClass + '"><i class="fas fa-' + stateIcon + '"></i> ' + stateText + '</span>';
         html += '</div>';
         html += '<div class="col-md-3 text-end">';
         if (app.hasUpdate) {
             html += '<button class="btn btn-success btn-sm" onclick="updateSingleApp(\'' + escapeHtml(app.uniqueName) + '\')"><i class="fas fa-download"></i> Update</button>';
+        } else if (!app.instancePackageId) {
+            html += '<button class="btn btn-primary btn-sm" onclick="installApp(\'' + escapeHtml(app.uniqueName) + '\')"><i class="fas fa-plus"></i> Install</button>';
         } else {
             html += '<button class="btn btn-outline-secondary btn-sm" disabled><i class="fas fa-check"></i> Current</button>';
         }
@@ -279,19 +300,19 @@ async function updateSingleApp(uniqueName) {
     const app = apps.find(a => a.uniqueName === uniqueName);
     if (!app) return;
     
-    if (!confirm('Install update for "' + app.name + '"?\n\nThis will update from v' + app.version + ' to v' + app.latestVersion)) {
+    if (!confirm('Install update for "' + app.name + '"?')) {
         return;
     }
     
     showLoading('Installing update...', app.name);
     
     try {
-        const url = `https://api.bap.microsoft.com/providers/Microsoft.BusinessAppPlatform/environments/${environmentId}/applicationPackages/${app.uniqueName}/install?api-version=2016-11-01`;
+        const url = `https://api.powerplatform.com/appmanagement/environments/${environmentId}/applicationPackages/${app.uniqueName}/install?api-version=2022-03-01-preview`;
         
         const response = await fetch(url, {
             method: 'POST',
             headers: {
-                'Authorization': `Bearer ${bapToken}`,
+                'Authorization': `Bearer ${ppToken}`,
                 'Content-Type': 'application/json'
             }
         });
@@ -302,15 +323,53 @@ async function updateSingleApp(uniqueName) {
         }
         
         hideLoading();
-        alert('Update started for ' + app.name + '!\n\nThe update is now running in the background. It may take several minutes to complete.');
+        alert('Update started for ' + app.name + '!\n\nThe update is running in the background and may take several minutes.');
         
-        // Refresh the list
         await loadApplications();
         
     } catch (error) {
         hideLoading();
         console.error('Update error:', error);
         showError('Failed to update: ' + error.message);
+    }
+}
+
+// Install an app
+async function installApp(uniqueName) {
+    const app = apps.find(a => a.uniqueName === uniqueName);
+    if (!app) return;
+    
+    if (!confirm('Install "' + app.name + '"?')) {
+        return;
+    }
+    
+    showLoading('Installing...', app.name);
+    
+    try {
+        const url = `https://api.powerplatform.com/appmanagement/environments/${environmentId}/applicationPackages/${app.uniqueName}/install?api-version=2022-03-01-preview`;
+        
+        const response = await fetch(url, {
+            method: 'POST',
+            headers: {
+                'Authorization': `Bearer ${ppToken}`,
+                'Content-Type': 'application/json'
+            }
+        });
+        
+        if (!response.ok) {
+            const errorText = await response.text();
+            throw new Error('Install failed: ' + response.status + ' - ' + errorText);
+        }
+        
+        hideLoading();
+        alert('Installation started for ' + app.name + '!\n\nThis may take several minutes.');
+        
+        await loadApplications();
+        
+    } catch (error) {
+        hideLoading();
+        console.error('Install error:', error);
+        showError('Failed to install: ' + error.message);
     }
 }
 
@@ -337,12 +396,12 @@ async function updateAllApps() {
         document.getElementById('loadingDetails').textContent = (i + 1) + ' of ' + appsToUpdate.length + ': ' + app.name;
         
         try {
-            const url = `https://api.bap.microsoft.com/providers/Microsoft.BusinessAppPlatform/environments/${environmentId}/applicationPackages/${app.uniqueName}/install?api-version=2016-11-01`;
+            const url = `https://api.powerplatform.com/appmanagement/environments/${environmentId}/applicationPackages/${app.uniqueName}/install?api-version=2022-03-01-preview`;
             
             const response = await fetch(url, {
                 method: 'POST',
                 headers: {
-                    'Authorization': `Bearer ${bapToken}`,
+                    'Authorization': `Bearer ${ppToken}`,
                     'Content-Type': 'application/json'
                 }
             });
@@ -377,7 +436,7 @@ async function updateAllApps() {
 function handleLogout() {
     if (confirm('Logout?')) {
         accessToken = null;
-        bapToken = null;
+        ppToken = null;
         environmentId = null;
         apps = [];
         
@@ -420,3 +479,4 @@ function escapeHtml(text) {
 }
 
 window.updateSingleApp = updateSingleApp;
+window.installApp = installApp;
