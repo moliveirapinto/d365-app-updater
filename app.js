@@ -175,7 +175,8 @@ async function loadApplications() {
     appsList.innerHTML = '<div class="text-center py-5"><div class="spinner-border text-primary"></div></div>';
     
     try {
-        const url = `https://api.bap.microsoft.com/providers/Microsoft.BusinessAppPlatform/scopes/admin/environments/${environmentId}/applicationPackages?api-version=2021-04-01`;
+        // Use the correct endpoint for Dynamics 365 apps
+        const url = `https://api.bap.microsoft.com/providers/Microsoft.BusinessAppPlatform/environments/${environmentId}/applicationPackages?api-version=2016-11-01`;
         
         console.log('Fetching apps from:', url);
         
@@ -285,7 +286,7 @@ async function updateSingleApp(uniqueName) {
     showLoading('Installing update...', app.name);
     
     try {
-        const url = `https://api.bap.microsoft.com/providers/Microsoft.BusinessAppPlatform/scopes/admin/environments/${environmentId}/applicationPackages/${app.uniqueName}/install?api-version=2021-04-01`;
+        const url = `https://api.bap.microsoft.com/providers/Microsoft.BusinessAppPlatform/environments/${environmentId}/applicationPackages/${app.uniqueName}/install?api-version=2016-11-01`;
         
         const response = await fetch(url, {
             method: 'POST',
@@ -336,7 +337,7 @@ async function updateAllApps() {
         document.getElementById('loadingDetails').textContent = (i + 1) + ' of ' + appsToUpdate.length + ': ' + app.name;
         
         try {
-            const url = `https://api.bap.microsoft.com/providers/Microsoft.BusinessAppPlatform/scopes/admin/environments/${environmentId}/applicationPackages/${app.uniqueName}/install?api-version=2021-04-01`;
+            const url = `https://api.bap.microsoft.com/providers/Microsoft.BusinessAppPlatform/environments/${environmentId}/applicationPackages/${app.uniqueName}/install?api-version=2016-11-01`;
             
             const response = await fetch(url, {
                 method: 'POST',
