@@ -1,8 +1,8 @@
 // Global variables
 let msalInstance = null;
 let accessToken = null;
+let bapToken = null;
 let environmentId = null;
-let environmentName = null;
 let orgUrl = null;
 let apps = [];
 
@@ -24,37 +24,26 @@ function createMsalConfig(tenantId, clientId) {
 // Initialize on page load
 document.addEventListener('DOMContentLoaded', function() {
     console.log('DOM Content Loaded');
-    
     hideLoading();
     
     if (typeof msal === 'undefined') {
-        console.error('MSAL library not loaded');
-        alert('Error: MSAL library failed to load. Please check your internet connection and refresh the page.');
+        alert('Error: MSAL library failed to load.');
         return;
     }
-    
-    console.log('MSAL library loaded successfully');
     
     const redirectUriElement = document.getElementById('redirectUri');
     if (redirectUriElement) {
         redirectUriElement.textContent = window.location.origin;
     }
     
-    try {
-        loadSavedCredentials();
-    } catch (error) {
-        console.error('Error loading saved credentials:', error);
-    }
+    loadSavedCredentials();
     
-    const authForm = document.getElementById('authForm');
-    if (authForm) {
-        authForm.addEventListener('submit', handleAuthentication);
-    }
-    
+    document.getElementById('authForm').addEventListener('submit', handleAuthentication);
     document.getElementById('logoutBtn').addEventListener('click', handleLogout);
     document.getElementById('refreshAppsBtn').addEventListener('click', loadApplications);
+    document.getElementById('updateAllBtn').addEventListener('click', updateAllApps);
     
-    console.log('App initialized successfully');
+    console.log('App initialized');
 });
 
 // Load saved credentials
@@ -67,9 +56,7 @@ function loadSavedCredentials() {
             document.getElementById('tenantId').value = creds.tenantId || '';
             document.getElementById('clientId').value = creds.clientId || '';
             document.getElementById('rememberMe').checked = true;
-        } catch (error) {
-            console.error('Failed to load saved credentials:', error);
-        }
+        } catch (e) {}
     }
 }
 
@@ -77,42 +64,21 @@ function loadSavedCredentials() {
 async function handleAuthentication(event) {
     event.preventDefault();
     
-    console.log('Authentication started');
-    
     const orgUrlValue = document.getElementById('orgUrl').value.trim();
     const tenantId = document.getElementById('tenantId').value.trim();
     const clientId = document.getElementById('clientId').value.trim();
     const rememberMe = document.getElementById('rememberMe').checked;
     
-    // Validate GUIDs
     const guidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-    if (!guidRegex.test(tenantId)) {
-        showError('Tenant ID must be a valid GUID');
-        return;
-    }
-    if (!guidRegex.test(clientId)) {
-        showError('Client ID must be a valid GUID');
-        return;
-    }
-    if (tenantId === clientId) {
-        showError('Tenant ID and Client ID cannot be the same');
-        return;
-    }
-    if (!orgUrlValue.startsWith('https://')) {
-        showError('Organization URL must start with https://');
+    if (!guidRegex.test(tenantId) || !guidRegex.test(clientId)) {
+        showError('Invalid GUID format');
         return;
     }
     
     orgUrl = orgUrlValue.replace(/\/$/, '');
     
     if (rememberMe) {
-        localStorage.setItem('d365_app_updater_creds', JSON.stringify({
-            orgUrl: orgUrl,
-            tenantId: tenantId,
-            clientId: clientId
-        }));
-    } else {
-        localStorage.removeItem('d365_app_updater_creds');
+        localStorage.setItem('d365_app_updater_creds', JSON.stringify({ orgUrl, tenantId, clientId }));
     }
     
     try {
@@ -122,30 +88,38 @@ async function handleAuthentication(event) {
         msalInstance = new msal.PublicClientApplication(msalConfig);
         await msalInstance.initialize();
         
+        // Get D365 token first
         const accounts = msalInstance.getAllAccounts();
-        const loginRequest = {
-            scopes: [`${orgUrl}/.default`],
-            account: accounts[0] || undefined,
-        };
+        const d365Request = { scopes: [`${orgUrl}/.default`], account: accounts[0] };
         
         let authResult;
         if (accounts.length > 0) {
             try {
-                authResult = await msalInstance.acquireTokenSilent(loginRequest);
-            } catch (error) {
-                authResult = await msalInstance.acquireTokenPopup(loginRequest);
+                authResult = await msalInstance.acquireTokenSilent(d365Request);
+            } catch (e) {
+                authResult = await msalInstance.acquireTokenPopup(d365Request);
             }
         } else {
-            authResult = await msalInstance.acquireTokenPopup(loginRequest);
+            authResult = await msalInstance.acquireTokenPopup(d365Request);
         }
-        
         accessToken = authResult.accessToken;
         
-        await testConnection();
-        await getEnvironmentInfo();
+        // Get BAP token for Power Platform API
+        showLoading('Authenticating...', 'Getting Power Platform API access');
+        const bapRequest = { scopes: ['https://api.bap.microsoft.com/.default'], account: msalInstance.getAllAccounts()[0] };
+        try {
+            const bapResult = await msalInstance.acquireTokenSilent(bapRequest);
+            bapToken = bapResult.accessToken;
+        } catch (e) {
+            const bapResult = await msalInstance.acquireTokenPopup(bapRequest);
+            bapToken = bapResult.accessToken;
+        }
         
-        // Set Admin Center link
-        updateAdminCenterLink();
+        console.log('BAP token acquired');
+        
+        // Get environment ID
+        showLoading('Loading...', 'Finding your environment');
+        await findEnvironment();
         
         hideLoading();
         
@@ -156,234 +130,260 @@ async function handleAuthentication(event) {
         
     } catch (error) {
         hideLoading();
-        console.error('Authentication error:', error);
-        
-        let errorMessage = 'Authentication failed: ' + error.message;
-        
-        if (error.message.includes('AADSTS9002326')) {
-            errorMessage = 'App must be configured as Single-Page Application (SPA) in Azure AD.';
-        } else if (error.message.includes('AADSTS500113')) {
-            errorMessage = 'Redirect URI not configured. Add ' + window.location.origin + ' to your Azure AD app registration.';
-        } else if (error.message.includes('endpoints_resolution_error') || error.message.includes('openid_config_error')) {
-            errorMessage = 'Invalid Tenant ID! Please check your Azure AD settings.';
-        }
-        
-        showError(errorMessage);
+        console.error('Auth error:', error);
+        showError('Authentication failed: ' + error.message);
     }
 }
 
-// Test connection to D365
-async function testConnection() {
-    const response = await fetch(`${orgUrl}/api/data/v9.2/WhoAmI`, {
-        method: 'GET',
-        headers: {
-            'Authorization': `Bearer ${accessToken}`,
-            'OData-MaxVersion': '4.0',
-            'OData-Version': '4.0',
-            'Accept': 'application/json',
-        },
+// Find the Power Platform environment matching the org URL
+async function findEnvironment() {
+    const response = await fetch('https://api.bap.microsoft.com/providers/Microsoft.BusinessAppPlatform/scopes/admin/environments?api-version=2021-04-01', {
+        headers: { 'Authorization': `Bearer ${bapToken}` }
     });
     
     if (!response.ok) {
-        throw new Error(`Connection test failed: ${response.status}`);
+        throw new Error('Failed to get environments: ' + response.status);
     }
     
-    return await response.json();
-}
-
-// Get environment information
-async function getEnvironmentInfo() {
-    try {
-        const response = await fetch(`${orgUrl}/api/data/v9.2/organizations?$select=name,organizationid`, {
-            method: 'GET',
-            headers: {
-                'Authorization': `Bearer ${accessToken}`,
-                'OData-MaxVersion': '4.0',
-                'OData-Version': '4.0',
-                'Accept': 'application/json',
-            },
-        });
-        
-        if (response.ok) {
-            const data = await response.json();
-            if (data.value && data.value.length > 0) {
-                const org = data.value[0];
-                environmentName = org.name;
-                environmentId = org.organizationid;
-                document.getElementById('environmentName').textContent = environmentName;
-                console.log('Environment ID:', environmentId);
+    const data = await response.json();
+    console.log('Environments:', data.value?.length);
+    
+    // Find environment matching our org URL
+    const orgHost = new URL(orgUrl).hostname.toLowerCase();
+    
+    for (const env of data.value || []) {
+        const instanceUrl = env.properties?.linkedEnvironmentMetadata?.instanceUrl;
+        if (instanceUrl) {
+            const envHost = new URL(instanceUrl).hostname.toLowerCase();
+            if (envHost === orgHost) {
+                environmentId = env.name;
+                document.getElementById('environmentName').textContent = env.properties?.displayName || env.name;
+                console.log('Found environment:', environmentId);
                 return;
             }
         }
-    } catch (error) {
-        console.warn('Could not fetch environment info:', error);
     }
     
-    document.getElementById('environmentName').textContent = orgUrl;
+    throw new Error('Could not find Power Platform environment for ' + orgUrl);
 }
 
-// Update Admin Center link
-function updateAdminCenterLink() {
-    const adminCenterBtn = document.getElementById('adminCenterBtn');
-    if (adminCenterBtn && environmentId) {
-        // Link to Power Platform Admin Center for the specific environment
-        adminCenterBtn.href = `https://admin.powerplatform.microsoft.com/environments/${environmentId}/applications`;
-    }
-}
-
-// Load applications from Dataverse
+// Load applications from Power Platform API
 async function loadApplications() {
-    showLoading('Loading solutions...', 'Fetching installed solutions from Dataverse');
+    showLoading('Loading applications...', 'Fetching from Power Platform');
     
     const appsList = document.getElementById('appsList');
-    appsList.innerHTML = '<div class="text-center py-5"><div class="spinner-border text-primary"></div><p class="mt-3">Loading...</p></div>';
+    appsList.innerHTML = '<div class="text-center py-5"><div class="spinner-border text-primary"></div></div>';
     
     try {
-        // Get managed solutions
-        const solutionsUrl = `${orgUrl}/api/data/v9.2/solutions?$filter=ismanaged eq true&$select=solutionid,uniquename,friendlyname,version,installedon,publisherid&$expand=publisherid($select=friendlyname)&$orderby=friendlyname`;
+        const url = `https://api.bap.microsoft.com/providers/Microsoft.BusinessAppPlatform/scopes/admin/environments/${environmentId}/applicationPackages?api-version=2021-04-01`;
         
-        const response = await fetch(solutionsUrl, {
-            method: 'GET',
-            headers: {
-                'Authorization': `Bearer ${accessToken}`,
-                'OData-MaxVersion': '4.0',
-                'OData-Version': '4.0',
-                'Accept': 'application/json',
-            },
+        console.log('Fetching apps from:', url);
+        
+        const response = await fetch(url, {
+            headers: { 'Authorization': `Bearer ${bapToken}` }
         });
         
         if (!response.ok) {
-            throw new Error(`Failed to fetch solutions: ${response.status}`);
+            const errorText = await response.text();
+            console.error('API Error:', response.status, errorText);
+            throw new Error('Failed to fetch apps: ' + response.status);
         }
         
         const data = await response.json();
-        console.log('Solutions:', data.value?.length || 0);
+        console.log('Apps response:', data);
         
-        apps = (data.value || []).map(solution => ({
-            id: solution.solutionid,
-            uniqueName: solution.uniquename,
-            name: solution.friendlyname || solution.uniquename,
-            version: solution.version || '1.0.0.0',
-            installedOn: solution.installedon,
-            publisher: solution.publisherid ? solution.publisherid.friendlyname : 'Unknown'
-        }));
-        
-        // Filter to show main/important solutions (not internal platform components)
-        const importantApps = apps.filter(app => {
-            const name = app.name.toLowerCase();
-            const uniqueName = app.uniqueName.toLowerCase();
-            
-            // Filter out internal platform solutions
-            const isInternal = 
-                uniqueName.startsWith('msft_') ||
-                uniqueName.startsWith('apiextension') ||
-                uniqueName.endsWith('_anchor') ||
-                uniqueName.includes('infrastructure') ||
-                uniqueName.includes('infra_') ||
-                name.includes('anchor') ||
-                name.includes('infrastructure');
-            
-            // Keep Microsoft Dynamics and important apps
-            const isImportant = 
-                uniqueName.startsWith('msdyn') ||
-                uniqueName.startsWith('msdynce') ||
-                uniqueName.startsWith('dynamics') ||
-                uniqueName.startsWith('omnichannelprime') ||
-                uniqueName.includes('sales') ||
-                uniqueName.includes('service') ||
-                uniqueName.includes('marketing') ||
-                uniqueName.includes('customerinsights') ||
-                name.toLowerCase().includes('dynamics') ||
-                name.toLowerCase().includes('sales') ||
-                name.toLowerCase().includes('service') ||
-                name.toLowerCase().includes('marketing');
-            
-            return isImportant && !isInternal;
+        apps = (data.value || []).map(app => {
+            const props = app.properties || {};
+            return {
+                id: app.id || app.name,
+                uniqueName: props.uniqueName || props.applicationId || app.name,
+                name: props.localizedDisplayName || props.displayName || props.uniqueName || 'Unknown',
+                version: props.version || props.applicationVersion || 'Unknown',
+                latestVersion: props.latestVersion || null,
+                state: props.state || 'Unknown',
+                hasUpdate: props.state === 'UpdateAvailable' || (props.latestVersion && props.latestVersion !== props.version),
+                publisher: props.publisherName || props.publisherId || 'Microsoft',
+                learnMoreUrl: props.learnMoreUrl || null
+            };
         });
         
-        displayApplications(importantApps.length > 0 ? importantApps : apps.slice(0, 100));
+        // Sort: updates first, then alphabetically
+        apps.sort((a, b) => {
+            if (a.hasUpdate && !b.hasUpdate) return -1;
+            if (!a.hasUpdate && b.hasUpdate) return 1;
+            return a.name.localeCompare(b.name);
+        });
+        
+        displayApplications();
         hideLoading();
         
     } catch (error) {
         hideLoading();
-        console.error('Error loading applications:', error);
-        appsList.innerHTML = '<div class="alert alert-danger"><i class="fas fa-exclamation-triangle"></i> Failed to load: ' + error.message + '</div>';
+        console.error('Error:', error);
+        appsList.innerHTML = '<div class="alert alert-danger">Failed to load: ' + error.message + '</div>';
     }
 }
 
 // Display applications
-function displayApplications(appsToShow) {
+function displayApplications() {
     const appsList = document.getElementById('appsList');
     
-    if (!appsToShow || appsToShow.length === 0) {
-        appsList.innerHTML = '<div class="text-center py-5"><i class="fas fa-inbox fa-3x text-muted mb-3"></i><p class="text-muted">No solutions found.</p></div>';
+    if (apps.length === 0) {
+        appsList.innerHTML = '<div class="text-center py-5"><p class="text-muted">No applications found.</p></div>';
         return;
     }
     
-    document.getElementById('updateCount').textContent = appsToShow.length;
+    const appsWithUpdates = apps.filter(a => a.hasUpdate);
+    document.getElementById('updateCount').textContent = appsWithUpdates.length;
+    document.getElementById('updateAllBtn').disabled = appsWithUpdates.length === 0;
     
     let html = '';
     
-    for (let i = 0; i < appsToShow.length; i++) {
-        const app = appsToShow[i];
-        const appName = app.name || 'Unknown';
-        const version = app.version || '1.0.0.0';
-        const installedDate = app.installedOn ? new Date(app.installedOn).toLocaleDateString() : 'N/A';
-        const publisher = app.publisher || 'Unknown';
-        
-        // Determine if it's a Microsoft app
-        const isMicrosoft = publisher.toLowerCase().includes('microsoft') || publisher.toLowerCase().includes('dynamics');
-        
+    for (const app of apps) {
         html += '<div class="app-card">';
         html += '<div class="row align-items-center">';
-        html += '<div class="col-md-7">';
-        html += '<div class="app-name">';
-        html += '<i class="fas fa-cube me-2" style="color: ' + (isMicrosoft ? '#0078d4' : '#6c757d') + ';"></i>';
-        html += escapeHtml(appName);
-        html += '</div>';
+        html += '<div class="col-md-6">';
+        html += '<div class="app-name"><i class="fas fa-cube me-2"></i>' + escapeHtml(app.name) + '</div>';
         html += '<div class="app-version mt-2">';
-        html += '<i class="fas fa-tag"></i> Version: <strong>' + escapeHtml(version) + '</strong>';
-        html += '</div>';
-        html += '<div class="text-muted small mt-1">';
-        html += '<i class="fas fa-building"></i> ' + escapeHtml(publisher);
-        html += ' &nbsp;|&nbsp; <i class="fas fa-calendar"></i> Installed: ' + installedDate;
-        html += '</div>';
-        html += '</div>';
-        html += '<div class="col-md-3 text-center">';
-        if (isMicrosoft) {
-            html += '<span class="badge bg-primary"><i class="fas fa-microsoft me-1"></i> Microsoft</span>';
-        } else {
-            html += '<span class="badge bg-secondary"><i class="fas fa-box me-1"></i> Partner</span>';
+        html += '<i class="fas fa-tag"></i> Installed: <strong>' + escapeHtml(app.version) + '</strong>';
+        if (app.hasUpdate && app.latestVersion) {
+            html += '<br><i class="fas fa-arrow-up text-success"></i> Available: <strong class="text-success">' + escapeHtml(app.latestVersion) + '</strong>';
         }
         html += '</div>';
-        html += '<div class="col-md-2 text-end">';
-        html += '<span class="badge-current"><i class="fas fa-check-circle"></i> Installed</span>';
+        html += '<div class="text-muted small mt-1"><i class="fas fa-building"></i> ' + escapeHtml(app.publisher) + '</div>';
+        html += '</div>';
+        html += '<div class="col-md-3 text-center">';
+        if (app.hasUpdate) {
+            html += '<span class="badge-update"><i class="fas fa-arrow-circle-up"></i> Update Available</span>';
+        } else {
+            html += '<span class="badge-current"><i class="fas fa-check-circle"></i> Up to Date</span>';
+        }
+        html += '</div>';
+        html += '<div class="col-md-3 text-end">';
+        if (app.hasUpdate) {
+            html += '<button class="btn btn-success btn-sm" onclick="updateSingleApp(\'' + escapeHtml(app.uniqueName) + '\')"><i class="fas fa-download"></i> Update</button>';
+        } else {
+            html += '<button class="btn btn-outline-secondary btn-sm" disabled><i class="fas fa-check"></i> Current</button>';
+        }
         html += '</div>';
         html += '</div>';
         html += '</div>';
     }
-    
-    // Add note at bottom
-    html += '<div class="alert alert-warning mt-3">';
-    html += '<i class="fas fa-lightbulb"></i> <strong>Tip:</strong> To check for updates to these solutions, click ';
-    html += '"<strong>Open Admin Center</strong>" above. The Power Platform Admin Center shows available updates for ';
-    html += 'Dynamics 365 apps that can be installed with one click.';
-    html += '</div>';
     
     appsList.innerHTML = html;
 }
 
-// Handle logout
+// Update a single app
+async function updateSingleApp(uniqueName) {
+    const app = apps.find(a => a.uniqueName === uniqueName);
+    if (!app) return;
+    
+    if (!confirm('Install update for "' + app.name + '"?\n\nThis will update from v' + app.version + ' to v' + app.latestVersion)) {
+        return;
+    }
+    
+    showLoading('Installing update...', app.name);
+    
+    try {
+        const url = `https://api.bap.microsoft.com/providers/Microsoft.BusinessAppPlatform/scopes/admin/environments/${environmentId}/applicationPackages/${app.uniqueName}/install?api-version=2021-04-01`;
+        
+        const response = await fetch(url, {
+            method: 'POST',
+            headers: {
+                'Authorization': `Bearer ${bapToken}`,
+                'Content-Type': 'application/json'
+            }
+        });
+        
+        if (!response.ok) {
+            const errorText = await response.text();
+            throw new Error('Install failed: ' + response.status + ' - ' + errorText);
+        }
+        
+        hideLoading();
+        alert('Update started for ' + app.name + '!\n\nThe update is now running in the background. It may take several minutes to complete.');
+        
+        // Refresh the list
+        await loadApplications();
+        
+    } catch (error) {
+        hideLoading();
+        console.error('Update error:', error);
+        showError('Failed to update: ' + error.message);
+    }
+}
+
+// Update all apps
+async function updateAllApps() {
+    const appsToUpdate = apps.filter(a => a.hasUpdate);
+    
+    if (appsToUpdate.length === 0) {
+        alert('No updates available');
+        return;
+    }
+    
+    if (!confirm('Install updates for ' + appsToUpdate.length + ' applications?\n\nThis will update all apps with available updates.')) {
+        return;
+    }
+    
+    showLoading('Installing updates...', '0 of ' + appsToUpdate.length);
+    
+    let successCount = 0;
+    let failCount = 0;
+    
+    for (let i = 0; i < appsToUpdate.length; i++) {
+        const app = appsToUpdate[i];
+        document.getElementById('loadingDetails').textContent = (i + 1) + ' of ' + appsToUpdate.length + ': ' + app.name;
+        
+        try {
+            const url = `https://api.bap.microsoft.com/providers/Microsoft.BusinessAppPlatform/scopes/admin/environments/${environmentId}/applicationPackages/${app.uniqueName}/install?api-version=2021-04-01`;
+            
+            const response = await fetch(url, {
+                method: 'POST',
+                headers: {
+                    'Authorization': `Bearer ${bapToken}`,
+                    'Content-Type': 'application/json'
+                }
+            });
+            
+            if (response.ok) {
+                successCount++;
+            } else {
+                failCount++;
+                console.error('Failed to update ' + app.name + ':', response.status);
+            }
+        } catch (error) {
+            failCount++;
+            console.error('Error updating ' + app.name + ':', error);
+        }
+        
+        // Small delay between requests
+        await new Promise(r => setTimeout(r, 1000));
+    }
+    
+    hideLoading();
+    
+    if (failCount === 0) {
+        alert('All ' + successCount + ' updates started successfully!\n\nUpdates are running in the background and may take several minutes.');
+    } else {
+        alert('Started ' + successCount + ' updates.\n' + failCount + ' failed.\n\nCheck the Power Platform Admin Center for details.');
+    }
+    
+    await loadApplications();
+}
+
+// Logout
 function handleLogout() {
-    if (confirm('Are you sure you want to logout?')) {
+    if (confirm('Logout?')) {
         accessToken = null;
+        bapToken = null;
         environmentId = null;
         apps = [];
         
         if (msalInstance) {
             const accounts = msalInstance.getAllAccounts();
             if (accounts.length > 0) {
-                msalInstance.logoutPopup({ account: accounts[0] }).catch(console.error);
+                msalInstance.logoutPopup({ account: accounts[0] }).catch(() => {});
             }
         }
         
@@ -392,26 +392,19 @@ function handleLogout() {
     }
 }
 
-// UI Helper functions
+// UI Helpers
 function showLoading(message, details) {
     const overlay = document.getElementById('loadingOverlay');
-    const messageEl = document.getElementById('loadingMessage');
-    const detailsEl = document.getElementById('loadingDetails');
-    
-    if (messageEl) messageEl.textContent = message;
-    if (detailsEl) detailsEl.textContent = details || '';
-    if (overlay) {
-        overlay.classList.remove('hidden');
-        overlay.style.display = 'flex';
-    }
+    document.getElementById('loadingMessage').textContent = message;
+    document.getElementById('loadingDetails').textContent = details || '';
+    overlay.classList.remove('hidden');
+    overlay.style.display = 'flex';
 }
 
 function hideLoading() {
     const overlay = document.getElementById('loadingOverlay');
-    if (overlay) {
-        overlay.classList.add('hidden');
-        overlay.style.display = 'none';
-    }
+    overlay.classList.add('hidden');
+    overlay.style.display = 'none';
 }
 
 function showError(message) {
@@ -421,6 +414,8 @@ function showError(message) {
 
 function escapeHtml(text) {
     const div = document.createElement('div');
-    div.textContent = text;
+    div.textContent = text || '';
     return div.innerHTML;
 }
+
+window.updateSingleApp = updateSingleApp;
