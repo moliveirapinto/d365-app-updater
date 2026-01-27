@@ -319,21 +319,24 @@ function displayApplications() {
     }
     
     const appsWithUpdates = apps.filter(a => a.hasUpdate);
-    document.getElementById('updateCount').textContent = appsWithUpdates.length;
+    const installedApps = apps.filter(a => a.instancePackageId);
+    document.getElementById('updateCount').textContent = installedApps.length;
     document.getElementById('updateAllBtn').disabled = appsWithUpdates.length === 0;
     
-    // Show only apps with updates or installed apps (not the full catalog)
+    // Show installed apps
     const installedOrUpdatable = apps.filter(a => a.hasUpdate || a.instancePackageId);
     const appsToShow = installedOrUpdatable.length > 0 ? installedOrUpdatable : apps.slice(0, 50);
     
     let html = '';
     
     // Add info message about installed apps
-    if (appsWithUpdates.length === 0 && installedOrUpdatable.length > 0) {
-        html += '<div class="alert alert-info mb-3">';
+    if (installedOrUpdatable.length > 0) {
+        html += '<div class="alert alert-warning mb-3">';
         html += '<i class="fas fa-info-circle me-2"></i>';
-        html += '<strong>Note:</strong> Showing ' + installedOrUpdatable.length + ' installed apps. ';
-        html += 'Click "Reinstall" to trigger an update check for any app.';
+        html += '<strong>' + installedOrUpdatable.length + ' installed apps found.</strong> ';
+        html += 'The Power Platform API does not expose update availability. ';
+        html += 'Use <strong>"Reinstall All"</strong> to apply any available updates to all apps, or click <strong>"Reinstall"</strong> on individual apps. ';
+        html += 'Apps already at the latest version will remain unchanged.';
         html += '</div>';
     }
     
