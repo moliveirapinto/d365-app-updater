@@ -621,7 +621,7 @@ async function updateSingleApp(uniqueName) {
     const app = apps.find(a => a.uniqueName === uniqueName);
     if (!app) return;
     
-    if (!confirm('Install update for "' + app.name + '"?\n\nCurrent: ' + app.version + '\nNew: ' + app.latestVersion)) {
+    if (!(await showModal({ title: 'Update App', message: 'Install update for "' + app.name + '"?\n\nCurrent: ' + app.version + '\nNew: ' + app.latestVersion, type: 'update', okText: 'Update', okClass: 'btn-success-modal' }))) {
         return;
     }
     
@@ -648,7 +648,7 @@ async function updateSingleApp(uniqueName) {
         }
         
         hideLoading();
-        alert('Update started for ' + app.name + '!\n\nThe update is running in the background and may take several minutes.');
+        await showAlert('Update Started', 'Update started for ' + app.name + '. The update is running in the background and may take several minutes.', 'success');
         
         await loadApplications();
         
@@ -664,7 +664,7 @@ async function installApp(uniqueName) {
     const app = apps.find(a => a.uniqueName === uniqueName);
     if (!app) return;
     
-    if (!confirm('Install "' + app.name + '"?')) {
+    if (!(await showModal({ title: 'Install App', message: 'Install "' + app.name + '"?', type: 'info', okText: 'Install', okClass: 'btn-success-modal' }))) {
         return;
     }
     
@@ -687,7 +687,7 @@ async function installApp(uniqueName) {
         }
         
         hideLoading();
-        alert('Installation started for ' + app.name + '!\n\nThis may take several minutes.');
+        await showAlert('Installation Started', 'Installation started for ' + app.name + '. This may take several minutes.', 'success');
         
         await loadApplications();
         
@@ -703,7 +703,7 @@ async function reinstallApp(uniqueName) {
     const app = apps.find(a => a.uniqueName === uniqueName);
     if (!app) return;
     
-    if (!confirm('Update "' + app.name + '"?\n\nCurrent version: ' + app.version)) {
+    if (!(await showModal({ title: 'Update App', message: 'Update "' + app.name + '"?\n\nCurrent version: ' + app.version, type: 'update', okText: 'Update', okClass: 'btn-success-modal' }))) {
         return;
     }
     
@@ -728,7 +728,7 @@ async function reinstallApp(uniqueName) {
         }
         
         hideLoading();
-        alert('Update started for ' + app.name + '!\n\nThis may take several minutes.');
+        await showAlert('Update Started', 'Update started for ' + app.name + '. This may take several minutes.', 'success');
         
         await loadApplications();
         
@@ -744,11 +744,11 @@ async function updateAllApps() {
     const appsToUpdate = apps.filter(a => a.hasUpdate);
     
     if (appsToUpdate.length === 0) {
-        alert('No updates available');
+        await showAlert('No Updates', 'No updates available.', 'info');
         return;
     }
     
-    if (!confirm('Install updates for ' + appsToUpdate.length + ' applications?\n\nThis will update all apps with available updates.')) {
+    if (!(await showUpdateConfirm(appsToUpdate))) {
         return;
     }
     
@@ -794,9 +794,9 @@ async function updateAllApps() {
     hideLoading();
     
     if (failCount === 0) {
-        alert('All ' + successCount + ' updates started successfully!\n\nUpdates are running in the background and may take several minutes.');
+        await showAlert('Updates Started', 'All ' + successCount + ' updates started successfully! Updates are running in the background and may take several minutes.', 'success');
     } else {
-        alert('Started ' + successCount + ' updates.\n' + failCount + ' failed.\n\nCheck the Power Platform Admin Center for details.');
+        await showAlert('Updates Submitted', 'Started ' + successCount + ' updates. ' + failCount + ' failed. Check the Power Platform Admin Center for details.', 'warning');
     }
     
     await loadApplications();
@@ -807,11 +807,11 @@ async function reinstallAllApps() {
     const appsToUpdate = apps.filter(a => a.hasUpdate);
     
     if (appsToUpdate.length === 0) {
-        alert('No updates available. All apps are up to date.');
+        await showAlert('All Up to Date', 'No updates available. All apps are up to date.', 'success');
         return;
     }
     
-    if (!confirm('Update ' + appsToUpdate.length + ' app' + (appsToUpdate.length !== 1 ? 's' : '') + ' with available updates?\n\n' + appsToUpdate.map(a => '• ' + a.name + ' (' + a.version + ' → ' + a.latestVersion + ')').join('\n'))) {
+    if (!(await showUpdateConfirm(appsToUpdate))) {
         return;
     }
     
@@ -856,9 +856,9 @@ async function reinstallAllApps() {
     hideLoading();
     
     if (failCount === 0) {
-        alert('All ' + successCount + ' update requests submitted!\n\nUpdates are running in the background and may take several minutes.');
+        await showAlert('Updates Submitted', 'All ' + successCount + ' update requests submitted! Updates are running in the background and may take several minutes.', 'success');
     } else {
-        alert('Submitted ' + successCount + ' updates.\n' + failCount + ' failed.\n\nCheck the Power Platform Admin Center for details.');
+        await showAlert('Updates Submitted', 'Submitted ' + successCount + ' updates. ' + failCount + ' failed. Check the Power Platform Admin Center for details.', 'warning');
     }
     
     await loadApplications();
@@ -866,7 +866,8 @@ async function reinstallAllApps() {
 
 // Logout
 function handleLogout() {
-    if (confirm('Logout?')) {
+    showModal({ title: 'Logout', message: 'Are you sure you want to logout?', type: 'warning', okText: 'Logout', okClass: 'btn-danger-modal' }).then(confirmed => {
+        if (!confirmed) return;
         accessToken = null;
         ppToken = null;
         environmentId = null;
@@ -881,7 +882,7 @@ function handleLogout() {
         
         document.getElementById('appsSection').classList.add('hidden');
         document.getElementById('authSection').classList.remove('hidden');
-    }
+    });
 }
 
 // UI Helpers
@@ -901,7 +902,7 @@ function hideLoading() {
 
 function showError(message) {
     hideLoading();
-    alert('Error: ' + message);
+    showModal({ title: 'Error', message: message, type: 'danger', confirmOnly: true });
 }
 
 function escapeHtml(text) {
@@ -910,5 +911,104 @@ function escapeHtml(text) {
     return div.innerHTML;
 }
 
+// ── Custom Modal System ──────────────────────────────────────────────
+let _modalResolve = null;
+
+/**
+ * Show a custom modal dialog. Returns a Promise<boolean>.
+ * Options:
+ *   title     – Modal title
+ *   message   – Text or HTML message
+ *   body      – Full HTML body (overrides message)
+ *   type      – 'info' | 'warning' | 'success' | 'danger' | 'update'
+ *   icon      – FontAwesome icon class (auto-selected from type if omitted)
+ *   okText    – OK button text (default "OK")
+ *   cancelText– Cancel button text (default "Cancel")
+ *   okClass   – Extra class for OK button (e.g. 'btn-success-modal')
+ *   confirmOnly – If true, hide Cancel button (alert-style)
+ */
+function showModal(opts) {
+    return new Promise(resolve => {
+        _modalResolve = resolve;
+        
+        const overlay = document.getElementById('customModal');
+        const iconWrap = document.getElementById('modalIconWrap');
+        const icon = document.getElementById('modalIcon');
+        const title = document.getElementById('modalTitle');
+        const body = document.getElementById('modalBody');
+        const okBtn = document.getElementById('modalOkBtn');
+        const cancelBtn = document.getElementById('modalCancelBtn');
+        
+        const typeIcons = {
+            info: 'fas fa-info-circle',
+            warning: 'fas fa-exclamation-triangle',
+            success: 'fas fa-check-circle',
+            danger: 'fas fa-times-circle',
+            update: 'fas fa-arrow-circle-up'
+        };
+        
+        const t = opts.type || 'info';
+        iconWrap.className = 'modal-icon-wrap icon-' + t;
+        icon.className = opts.icon || typeIcons[t] || typeIcons.info;
+        title.textContent = opts.title || 'Notice';
+        
+        if (opts.body) {
+            body.innerHTML = opts.body;
+        } else {
+            body.innerHTML = '<p class="mb-0">' + escapeHtml(opts.message || '') + '</p>';
+        }
+        
+        okBtn.textContent = opts.okText || 'OK';
+        okBtn.className = 'btn btn-modal-ok' + (opts.okClass ? ' ' + opts.okClass : '');
+        cancelBtn.textContent = opts.cancelText || 'Cancel';
+        cancelBtn.style.display = opts.confirmOnly ? 'none' : '';
+        
+        overlay.style.display = 'flex';
+    });
+}
+
+function closeModal(result) {
+    document.getElementById('customModal').style.display = 'none';
+    if (_modalResolve) {
+        _modalResolve(result);
+        _modalResolve = null;
+    }
+}
+
+/**
+ * Helper: show a confirm modal for updating apps.
+ * @param {Array} appsToUpdate – array of {name, version, latestVersion}
+ * @returns Promise<boolean>
+ */
+function showUpdateConfirm(appsToUpdate) {
+    let listHtml = '<ul class="update-list">';
+    for (const app of appsToUpdate) {
+        listHtml += '<li>';
+        listHtml += '<span class="app-label" title="' + escapeHtml(app.name) + '">' + escapeHtml(app.name) + '</span>';
+        listHtml += '<span class="version-badge">' + escapeHtml(app.version) + '<span class="arrow">→</span>' + escapeHtml(app.latestVersion || 'latest') + '</span>';
+        listHtml += '</li>';
+    }
+    listHtml += '</ul>';
+    
+    const bodyHtml = '<p class="modal-message">The following ' + appsToUpdate.length + ' app' + (appsToUpdate.length !== 1 ? 's' : '') + ' will be updated:</p>' + listHtml;
+    
+    return showModal({
+        title: 'Update Apps',
+        body: bodyHtml,
+        type: 'update',
+        okText: 'Update All',
+        okClass: 'btn-success-modal',
+        cancelText: 'Cancel'
+    });
+}
+
+/**
+ * Helper: show a simple alert modal (no Cancel button).
+ */
+function showAlert(title, message, type) {
+    return showModal({ title, message, type: type || 'info', confirmOnly: true });
+}
+
 window.updateSingleApp = updateSingleApp;
 window.installApp = installApp;
+window.closeModal = closeModal;
