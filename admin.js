@@ -3,8 +3,10 @@
 // Connects to Supabase to display usage analytics
 // ═══════════════════════════════════════════════════════════════
 
-let supabaseUrl = '';
-let supabaseKey = '';
+const DEFAULT_SUPABASE_URL = 'https://fpekzltxukikaixebeeu.supabase.co';
+const DEFAULT_SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZwZWt6bHR4dWtpa2FpeGViZWV1Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzA0MDU0ODEsImV4cCI6MjA4NTk4MTQ4MX0.uH4JgKbf_-Al_iArzEy6UZ3edJNzFSCBVlMNI04li0Y';
+let supabaseUrl = DEFAULT_SUPABASE_URL;
+let supabaseKey = DEFAULT_SUPABASE_KEY;
 let allRecords = [];
 let filteredRecords = [];
 let currentPage = 0;
@@ -17,25 +19,11 @@ let chartUsers = null;
 
 // ── Init ──────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', function () {
-    const saved = localStorage.getItem('d365_admin_supabase');
-    if (saved) {
-        try {
-            const cfg = JSON.parse(saved);
-            document.getElementById('cfgUrl').value = cfg.url || '';
-            document.getElementById('cfgKey').value = cfg.key || '';
-            if (cfg.url && cfg.key) {
-                supabaseUrl = cfg.url.replace(/\/+$/, '');
-                supabaseKey = cfg.key;
-                loadData();
-            } else {
-                document.getElementById('emptyState').style.display = '';
-            }
-        } catch (e) {
-            document.getElementById('emptyState').style.display = '';
-        }
-    } else {
-        document.getElementById('emptyState').style.display = '';
-    }
+    // Pre-fill config fields with hardcoded defaults
+    document.getElementById('cfgUrl').value = supabaseUrl;
+    document.getElementById('cfgKey').value = supabaseKey;
+    // Auto-load data immediately since config is hardcoded
+    loadData();
 });
 
 function saveConfig() {

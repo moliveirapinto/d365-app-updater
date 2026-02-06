@@ -6,7 +6,8 @@ let currentOrgUrl = null;
 let apps = [];
 
 // Supabase config for usage tracking
-const SUPABASE_CONFIG_KEY = 'd365_admin_supabase';
+const SUPABASE_URL = 'https://fpekzltxukikaixebeeu.supabase.co';
+const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZwZWt6bHR4dWtpa2FpeGViZWV1Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzA0MDU0ODEsImV4cCI6MjA4NTk4MTQ4MX0.uH4JgKbf_-Al_iArzEy6UZ3edJNzFSCBVlMNI04li0Y';
 
 // MSAL Configuration
 function createMsalConfig(tenantId, clientId) {
@@ -1173,15 +1174,7 @@ function handleLogout() {
 
 // ── Usage Tracking (Supabase) ─────────────────────────────────
 function getSupabaseConfig() {
-    try {
-        const saved = localStorage.getItem(SUPABASE_CONFIG_KEY);
-        if (!saved) return null;
-        const cfg = JSON.parse(saved);
-        if (!cfg.url || !cfg.key) return null;
-        return { url: cfg.url.replace(/\/+$/, ''), key: cfg.key };
-    } catch (e) {
-        return null;
-    }
+    return { url: SUPABASE_URL, key: SUPABASE_KEY };
 }
 
 function getCurrentUserEmail() {
