@@ -128,16 +128,8 @@ async function handleAuthentication(event) {
 
 // Get environment name from BAP API (for display purposes)
 async function getEnvironmentName() {
-    // First get BAP token
-    const bapRequest = { scopes: ['https://api.bap.microsoft.com/.default'], account: msalInstance.getAllAccounts()[0] };
-    let bapToken;
-    try {
-        const bapResult = await msalInstance.acquireTokenSilent(bapRequest);
-        bapToken = bapResult.accessToken;
-    } catch (e) {
-        const bapResult = await msalInstance.acquireTokenPopup(bapRequest);
-        bapToken = bapResult.accessToken;
-    }
+    // Use shared BAP token helper
+    const bapToken = await getBAPToken();
     
     // Get environment details by ID
     const response = await fetch(`https://api.bap.microsoft.com/providers/Microsoft.BusinessAppPlatform/scopes/admin/environments/${environmentId}?api-version=2021-04-01`, {
@@ -158,6 +150,7 @@ async function getEnvironmentName() {
 
 // Compare two version strings (e.g., "1.2.3.4" vs "1.2.3.5")
 function compareVersions(v1, v2) {
+    if (!v1 || !v2) return 0;
     const parts1 = v1.split('.').map(Number);
     const parts2 = v2.split('.').map(Number);
     for (let i = 0; i < Math.max(parts1.length, parts2.length); i++) {
@@ -169,6 +162,56 @@ function compareVersions(v1, v2) {
     return 0;
 }
 
+// Helper: fetch all pages from a paginated Power Platform API endpoint
+async function fetchAllPages(url, token) {
+    let allItems = [];
+    let nextUrl = url;
+    let pageCount = 0;
+    
+    while (nextUrl) {
+        pageCount++;
+        console.log(`Fetching page ${pageCount}: ${nextUrl.substring(0, 120)}...`);
+        
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 60000);
+        
+        const response = await fetch(nextUrl, {
+            headers: { 'Authorization': `Bearer ${token}` },
+            signal: controller.signal
+        });
+        
+        clearTimeout(timeoutId);
+        
+        if (!response.ok) {
+            const errorText = await response.text();
+            console.error('API Error on page', pageCount, ':', response.status, errorText);
+            throw new Error('Failed to fetch apps (page ' + pageCount + '): ' + response.status);
+        }
+        
+        const data = await response.json();
+        const items = data.value || [];
+        allItems = allItems.concat(items);
+        nextUrl = data['@odata.nextLink'] || null;
+        
+        console.log(`Page ${pageCount}: got ${items.length} items (total so far: ${allItems.length})`);
+    }
+    
+    return allItems;
+}
+
+// Helper: get BAP token for admin API calls
+async function getBAPToken() {
+    const accounts = msalInstance.getAllAccounts();
+    const bapRequest = { scopes: ['https://api.bap.microsoft.com/.default'], account: accounts[0] };
+    try {
+        const result = await msalInstance.acquireTokenSilent(bapRequest);
+        return result.accessToken;
+    } catch (e) {
+        const result = await msalInstance.acquireTokenPopup(bapRequest);
+        return result.accessToken;
+    }
+}
+
 // Load applications from Power Platform API
 async function loadApplications() {
     showLoading('Loading applications...', 'Fetching from Power Platform');
@@ -177,94 +220,84 @@ async function loadApplications() {
     appsList.innerHTML = '<div class="text-center py-5"><div class="spinner-border text-primary"></div></div>';
     
     try {
-        // Use the correct Power Platform API endpoint
-        const url = `https://api.powerplatform.com/appmanagement/environments/${environmentId}/applicationPackages?api-version=2022-03-01-preview`;
+        const baseUrl = `https://api.powerplatform.com/appmanagement/environments/${environmentId}/applicationPackages`;
+        const apiVersion = 'api-version=2022-03-01-preview';
         
-        console.log('Fetching apps from:', url);
+        // ── Step 1: Fetch INSTALLED apps explicitly ──────────────────
+        showLoading('Loading applications...', 'Fetching installed apps...');
+        const installedAppsRaw = await fetchAllPages(
+            `${baseUrl}?appInstallState=Installed&${apiVersion}`, ppToken
+        );
+        console.log('Installed apps fetched:', installedAppsRaw.length);
         
-        // Add timeout to the fetch
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 60000); // 60 second timeout
+        // ── Step 2: Fetch ALL catalog packages (includes newer versions) ──
+        showLoading('Loading applications...', 'Fetching available catalog versions...');
+        const allAppsRaw = await fetchAllPages(
+            `${baseUrl}?${apiVersion}`, ppToken
+        );
+        console.log('All catalog packages fetched:', allAppsRaw.length);
         
-        const response = await fetch(url, {
-            headers: { 'Authorization': `Bearer ${ppToken}` },
-            signal: controller.signal
-        });
-        
-        clearTimeout(timeoutId);
-        
-        console.log('Response status:', response.status);
-        
-        if (!response.ok) {
-            const errorText = await response.text();
-            console.error('API Error:', response.status, errorText);
-            throw new Error('Failed to fetch apps: ' + response.status);
+        // Debug: log unique states and sample data
+        const states = [...new Set(allAppsRaw.map(a => a.state))];
+        console.log('All states found in catalog:', states);
+        if (installedAppsRaw.length > 0) {
+            console.log('Sample installed app fields:', Object.keys(installedAppsRaw[0]));
+            console.log('Sample installed app:', JSON.stringify(installedAppsRaw[0], null, 2));
         }
         
-        const data = await response.json();
-        const allApps = data.value || [];
-        console.log('Apps response:', allApps.length, 'apps');
-        
-        // Debug: Log all unique states and check for update-related fields
-        const states = [...new Set(allApps.map(a => a.state))];
-        console.log('All states found:', states);
-        
-        // Check first few apps for any update-related fields
-        if (allApps.length > 0) {
-            console.log('Sample app fields:', Object.keys(allApps[0]));
-            // Look for installed apps that might have update info
-            const sampleInstalled = allApps.find(a => a.state === 'Installed');
-            if (sampleInstalled) {
-                console.log('Sample installed app:', JSON.stringify(sampleInstalled, null, 2));
+        // ── Step 3: Build version maps from ALL catalog entries ──────
+        // Map by applicationId → keep highest version
+        const catalogMapById = new Map();
+        for (const app of allAppsRaw) {
+            if (!app.applicationId) continue;
+            const existing = catalogMapById.get(app.applicationId);
+            if (!existing || compareVersions(app.version, existing.version) > 0) {
+                catalogMapById.set(app.applicationId, app);
             }
         }
         
-        // Separate installed apps from catalog apps (include all non-installed states as catalog)
-        const installedApps = allApps.filter(a => a.state === 'Installed' || a.instancePackageId);
-        const catalogApps = allApps.filter(a => a.state !== 'Installed' && !a.instancePackageId);
-        
-        console.log('Installed apps:', installedApps.length);
-        console.log('Catalog apps (available):', catalogApps.length);
-        
-        // Build a map of ALL catalog apps by applicationId (keep the highest version)
-        const catalogMap = new Map();
-        for (const app of catalogApps) {
-            if (app.applicationId) {
-                const existing = catalogMap.get(app.applicationId);
-                if (!existing || compareVersions(app.version, existing.version) > 0) {
-                    catalogMap.set(app.applicationId, app);
-                }
-            }
-        }
-        
-        // Also build a map by uniqueName for apps that share the same base name
+        // Map by uniqueName base → keep highest version (fallback matching)
         const catalogByName = new Map();
-        for (const app of catalogApps) {
-            if (app.uniqueName) {
-                const baseName = app.uniqueName.replace(/_upgrade$/i, '').replace(/_\d+$/, '');
-                const existing = catalogByName.get(baseName);
-                if (!existing || compareVersions(app.version, existing.version) > 0) {
-                    catalogByName.set(baseName, app);
-                }
+        for (const app of allAppsRaw) {
+            if (!app.uniqueName) continue;
+            const baseName = app.uniqueName.replace(/_upgrade$/i, '').replace(/_\d+$/, '');
+            const existing = catalogByName.get(baseName);
+            if (!existing || compareVersions(app.version, existing.version) > 0) {
+                catalogByName.set(baseName, app);
             }
         }
         
-        // Process installed apps and check for updates
+        console.log('Catalog map by ID entries:', catalogMapById.size);
+        console.log('Catalog map by name entries:', catalogByName.size);
+        
+        // ── Step 4: Detect updates for each installed app ────────────
         let updatesFound = 0;
-        apps = installedApps.map(app => {
+        apps = installedAppsRaw.map(app => {
             let hasUpdate = false;
             let latestVersion = null;
             let catalogUniqueName = null;
             
-            // Method 1: Check by applicationId
-            const catalogVersion = catalogMap.get(app.applicationId);
-            if (catalogVersion && compareVersions(catalogVersion.version, app.version) > 0) {
-                hasUpdate = true;
-                latestVersion = catalogVersion.version;
-                catalogUniqueName = catalogVersion.uniqueName;
+            // Check 1: Direct API fields that might indicate update availability
+            if (app.updateAvailable || app.catalogVersion || app.availableVersion || app.latestVersion) {
+                const directVersion = app.catalogVersion || app.availableVersion || app.latestVersion;
+                if (directVersion && compareVersions(directVersion, app.version) > 0) {
+                    hasUpdate = true;
+                    latestVersion = directVersion;
+                }
             }
             
-            // Method 2: Check by uniqueName base (in case applicationId doesn't match)
+            // Check 2: Compare with catalog entry by applicationId
+            if (!hasUpdate && app.applicationId) {
+                const catalogEntry = catalogMapById.get(app.applicationId);
+                if (catalogEntry && compareVersions(catalogEntry.version, app.version) > 0) {
+                    hasUpdate = true;
+                    latestVersion = catalogEntry.version;
+                    catalogUniqueName = catalogEntry.uniqueName;
+                    console.log(`  [by appId] ${app.localizedName || app.uniqueName}: ${app.version} → ${latestVersion}`);
+                }
+            }
+            
+            // Check 3: Compare with catalog entry by uniqueName base
             if (!hasUpdate && app.uniqueName) {
                 const baseName = app.uniqueName.replace(/_upgrade$/i, '').replace(/_\d+$/, '');
                 const byName = catalogByName.get(baseName);
@@ -272,18 +305,11 @@ async function loadApplications() {
                     hasUpdate = true;
                     latestVersion = byName.version;
                     catalogUniqueName = byName.uniqueName;
+                    console.log(`  [by name] ${app.localizedName || app.uniqueName}: ${app.version} → ${latestVersion}`);
                 }
             }
             
-            // Method 3: Check if the API directly provides update info
-            if (!hasUpdate && app.updateAvailable) {
-                hasUpdate = true;
-            }
-            
-            if (hasUpdate) {
-                updatesFound++;
-                console.log('Update found for:', app.localizedName || app.uniqueName, app.version, '->', latestVersion);
-            }
+            if (hasUpdate) updatesFound++;
             
             return {
                 id: app.id,
@@ -302,13 +328,111 @@ async function loadApplications() {
             };
         });
         
-        console.log('Total updates found via version comparison:', updatesFound);
+        console.log('Updates found from PP API:', updatesFound);
         
-        // Also add apps from catalog that are not installed (for browse/install)
-        const installedAppIds = new Set(installedApps.map(a => a.applicationId).filter(Boolean));
+        // ── Step 5: If PP API found zero updates, try BAP Admin API ──
+        if (updatesFound === 0 && installedAppsRaw.length > 0) {
+            console.log('No updates found via PP API. Trying BAP Admin API as fallback...');
+            showLoading('Loading applications...', 'Checking for updates via Admin API...');
+            
+            try {
+                const bapToken = await getBAPToken();
+                const bapUrl = `https://api.bap.microsoft.com/providers/Microsoft.BusinessAppPlatform/scopes/admin/environments/${environmentId}/applicationPackages?api-version=2021-04-01`;
+                const bapApps = await fetchAllPages(bapUrl, bapToken);
+                
+                console.log('BAP API returned:', bapApps.length, 'packages');
+                if (bapApps.length > 0) {
+                    console.log('BAP sample app fields:', Object.keys(bapApps[0]));
+                    console.log('BAP sample app:', JSON.stringify(bapApps[0], null, 2));
+                }
+                
+                // Build BAP catalog map by applicationId (keep highest version)
+                const bapCatalogMap = new Map();
+                for (const bapApp of bapApps) {
+                    if (!bapApp.applicationId) continue;
+                    const existing = bapCatalogMap.get(bapApp.applicationId);
+                    if (!existing || compareVersions(bapApp.version, existing.version) > 0) {
+                        bapCatalogMap.set(bapApp.applicationId, bapApp);
+                    }
+                }
+                
+                // Also build by uniqueName base
+                const bapByName = new Map();
+                for (const bapApp of bapApps) {
+                    if (!bapApp.uniqueName) continue;
+                    const baseName = bapApp.uniqueName.replace(/_upgrade$/i, '').replace(/_\d+$/, '');
+                    const existing = bapByName.get(baseName);
+                    if (!existing || compareVersions(bapApp.version, existing.version) > 0) {
+                        bapByName.set(baseName, bapApp);
+                    }
+                }
+                
+                // Re-check installed apps against BAP data
+                for (const app of apps) {
+                    if (app.hasUpdate) continue;
+                    
+                    // Check direct fields from BAP response for this app
+                    const bapInstalled = bapApps.find(b => 
+                        (b.applicationId === app.applicationId) && 
+                        (b.state === 'Installed' || b.instancePackageId)
+                    );
+                    if (bapInstalled) {
+                        // Check if BAP provides update info directly
+                        const directVer = bapInstalled.catalogVersion || bapInstalled.availableVersion || bapInstalled.latestVersion;
+                        if (directVer && compareVersions(directVer, app.version) > 0) {
+                            app.hasUpdate = true;
+                            app.latestVersion = directVer;
+                            updatesFound++;
+                            console.log(`  [BAP direct] ${app.name}: ${app.version} → ${directVer}`);
+                            continue;
+                        }
+                    }
+                    
+                    // Compare by applicationId
+                    if (app.applicationId) {
+                        const bapEntry = bapCatalogMap.get(app.applicationId);
+                        if (bapEntry && compareVersions(bapEntry.version, app.version) > 0) {
+                            app.hasUpdate = true;
+                            app.latestVersion = bapEntry.version;
+                            app.catalogUniqueName = bapEntry.uniqueName || app.uniqueName;
+                            updatesFound++;
+                            console.log(`  [BAP by appId] ${app.name}: ${app.version} → ${bapEntry.version}`);
+                            continue;
+                        }
+                    }
+                    
+                    // Compare by uniqueName
+                    if (app.uniqueName) {
+                        const baseName = app.uniqueName.replace(/_upgrade$/i, '').replace(/_\d+$/, '');
+                        const bapByNameEntry = bapByName.get(baseName);
+                        if (bapByNameEntry && compareVersions(bapByNameEntry.version, app.version) > 0) {
+                            app.hasUpdate = true;
+                            app.latestVersion = bapByNameEntry.version;
+                            app.catalogUniqueName = bapByNameEntry.uniqueName || app.uniqueName;
+                            updatesFound++;
+                            console.log(`  [BAP by name] ${app.name}: ${app.version} → ${bapByNameEntry.version}`);
+                        }
+                    }
+                }
+                
+                console.log('Updates found after BAP fallback:', updatesFound);
+            } catch (bapError) {
+                console.warn('BAP API fallback failed (non-critical):', bapError.message);
+            }
+        }
+        
+        // ── Step 6: Sort — updates first, then alphabetically ────────
+        apps.sort((a, b) => {
+            if (a.hasUpdate && !b.hasUpdate) return -1;
+            if (!a.hasUpdate && b.hasUpdate) return 1;
+            return a.name.localeCompare(b.name);
+        });
+        
+        // Store not-installed apps for browsing
+        const installedAppIds = new Set(installedAppsRaw.map(a => a.applicationId).filter(Boolean));
         const notInstalledApps = [];
-        for (const [appId, app] of catalogMap) {
-            if (!installedAppIds.has(appId)) {
+        for (const [appId, app] of catalogMapById) {
+            if (!installedAppIds.has(appId) && app.state !== 'Installed' && !app.instancePackageId) {
                 notInstalledApps.push({
                     id: app.id,
                     uniqueName: app.uniqueName,
@@ -326,24 +450,12 @@ async function loadApplications() {
                 });
             }
         }
-        
-        console.log('Apps with updates:', apps.filter(a => a.hasUpdate).length);
-        
-        // Sort: updates first, then installed, then available - all alphabetically
-        apps.sort((a, b) => {
-            if (a.hasUpdate && !b.hasUpdate) return -1;
-            if (!a.hasUpdate && b.hasUpdate) return 1;
-            return a.name.localeCompare(b.name);
-        });
-        
-        // Store not-installed apps for browsing (sorted alphabetically)
         notInstalledApps.sort((a, b) => a.name.localeCompare(b.name));
         window.availableApps = notInstalledApps;
         
-        console.log('Displaying applications...');
+        console.log('Final result:', apps.length, 'installed apps,', updatesFound, 'with updates');
         displayApplications();
         hideLoading();
-        console.log('Loading complete');
         
     } catch (error) {
         hideLoading();
@@ -370,8 +482,18 @@ function displayApplications() {
     
     const appsWithUpdates = apps.filter(a => a.hasUpdate);
     const installedApps = apps.filter(a => a.instancePackageId);
-    document.getElementById('appCountText').textContent = installedApps.length + ' apps installed';
-    document.getElementById('updateAllBtn').disabled = appsWithUpdates.length === 0;
+    const updateCount = appsWithUpdates.length;
+    
+    // Update summary text
+    if (updateCount > 0) {
+        document.getElementById('appCountText').innerHTML = 
+            installedApps.length + ' apps installed &nbsp;|&nbsp; <span style="color: #28a745; font-weight: 600;">' + 
+            updateCount + ' update' + (updateCount !== 1 ? 's' : '') + ' available</span>';
+    } else {
+        document.getElementById('appCountText').textContent = installedApps.length + ' apps installed — all up to date';
+    }
+    
+    document.getElementById('updateAllBtn').disabled = updateCount === 0;
     
     // Show installed apps
     const installedOrUpdatable = apps.filter(a => a.hasUpdate || a.instancePackageId);
@@ -379,11 +501,21 @@ function displayApplications() {
     
     let html = '';
     
-    // Add info message
-    if (installedOrUpdatable.length > 0) {
+    // Update summary banner
+    if (updateCount > 0) {
+        html += '<div class="alert alert-warning mb-3" style="border-left: 4px solid #ffc107;">';
+        html += '<div class="d-flex align-items-center">';
+        html += '<i class="fas fa-arrow-circle-up fa-2x me-3 text-warning"></i>';
+        html += '<div>';
+        html += '<strong>' + updateCount + ' update' + (updateCount !== 1 ? 's' : '') + ' available</strong><br>';
+        html += '<small>Click <strong>"Update All Apps"</strong> to apply all updates, or update apps individually below.</small>';
+        html += '</div>';
+        html += '</div>';
+        html += '</div>';
+    } else {
         html += '<div class="alert alert-success mb-3">';
         html += '<i class="fas fa-check-circle me-2"></i>';
-        html += 'Click <strong>"Update All Apps"</strong> to apply any available updates, or update apps individually.';
+        html += 'All installed applications are up to date.';
         html += '</div>';
     }
     
@@ -392,14 +524,14 @@ function displayApplications() {
         const stateIcon = app.hasUpdate ? 'arrow-circle-up' : 'check-circle';
         const stateText = app.hasUpdate ? 'Update Available' : (app.instancePackageId ? 'Installed' : 'Available');
         
-        html += '<div class="app-card">';
+        html += '<div class="app-card' + (app.hasUpdate ? ' border-success' : '') + '" style="' + (app.hasUpdate ? 'border-left: 4px solid #28a745; background: #f8fff8;' : '') + '">';
         html += '<div class="row align-items-center">';
         html += '<div class="col-md-6">';
         html += '<div class="app-name"><i class="fas fa-cube me-2"></i>' + escapeHtml(app.name) + '</div>';
         html += '<div class="app-version mt-2">';
         html += '<i class="fas fa-tag"></i> Version: <strong>' + escapeHtml(app.version) + '</strong>';
         if (app.hasUpdate && app.latestVersion) {
-            html += ' → <strong class="text-success">' + escapeHtml(app.latestVersion) + '</strong>';
+            html += ' <i class="fas fa-long-arrow-alt-right text-success mx-1"></i> <strong class="text-success">' + escapeHtml(app.latestVersion) + '</strong>';
         }
         html += '</div>';
         html += '<div class="text-muted small mt-1"><i class="fas fa-building"></i> ' + escapeHtml(app.publisher) + '</div>';
