@@ -51,7 +51,8 @@ function loadSavedCredentials() {
     if (savedCreds) {
         try {
             const creds = JSON.parse(savedCreds);
-            document.getElementById('orgUrl').value = creds.orgUrl || '';
+            const orgUrlEl = document.getElementById('orgUrl');
+            if (orgUrlEl) orgUrlEl.value = creds.orgUrl || creds.organizationId || creds.environmentId || '';
             document.getElementById('tenantId').value = creds.tenantId || '';
             document.getElementById('clientId').value = creds.clientId || '';
             document.getElementById('rememberMe').checked = true;
