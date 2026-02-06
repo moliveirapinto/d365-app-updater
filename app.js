@@ -18,7 +18,7 @@ function createMsalConfig(tenantId, clientId) {
             redirectUri: window.location.origin,
         },
         cache: {
-            cacheLocation: 'sessionStorage',
+            cacheLocation: 'localStorage',
             storeAuthStateInCookie: false,
         },
     };
@@ -47,6 +47,9 @@ document.addEventListener('DOMContentLoaded', function() {
     document.getElementById('updateAllBtn').addEventListener('click', updateAllApps);
     document.getElementById('reinstallAllBtn').addEventListener('click', reinstallAllApps);
     
+    // Try to auto-login if we have saved credentials and a cached MSAL session
+    tryAutoLogin();
+    
     console.log('App initialized');
 });
 
@@ -62,6 +65,79 @@ function loadSavedCredentials() {
             document.getElementById('clientId').value = creds.clientId || '';
             document.getElementById('rememberMe').checked = true;
         } catch (e) {}
+    }
+}
+
+// Auto-login: silently resume session if MSAL tokens are cached
+async function tryAutoLogin() {
+    const savedCreds = localStorage.getItem('d365_app_updater_creds');
+    if (!savedCreds) return;
+
+    let creds;
+    try {
+        creds = JSON.parse(savedCreds);
+    } catch (e) {
+        return;
+    }
+
+    const orgUrlValue = creds.orgUrl || creds.organizationId || creds.environmentId || '';
+    const tenantId = creds.tenantId || '';
+    const clientId = creds.clientId || '';
+    if (!tenantId || !clientId || !orgUrlValue) return;
+
+    try {
+        const msalConfig = createMsalConfig(tenantId, clientId);
+        msalInstance = new msal.PublicClientApplication(msalConfig);
+        await msalInstance.initialize();
+
+        const accounts = msalInstance.getAllAccounts();
+        if (accounts.length === 0) {
+            // No cached session, user must log in manually
+            msalInstance = null;
+            return;
+        }
+
+        showLoading('Reconnecting...', 'Restoring your session');
+
+        // Try to silently acquire Power Platform token
+        const ppRequest = { scopes: ['https://api.powerplatform.com/.default'], account: accounts[0] };
+        const ppResult = await msalInstance.acquireTokenSilent(ppRequest);
+        ppToken = ppResult.accessToken;
+
+        showLoading('Reconnecting...', 'Resolving environment');
+
+        // Normalize org URL
+        let normalizedOrgUrl = orgUrlValue;
+        if (!normalizedOrgUrl.startsWith('https://')) {
+            normalizedOrgUrl = 'https://' + normalizedOrgUrl;
+        }
+        normalizedOrgUrl = normalizedOrgUrl.replace(/\/+$/, '');
+
+        environmentId = await resolveOrgUrlToEnvironmentId(normalizedOrgUrl);
+        if (!environmentId) {
+            throw new Error('Could not resolve environment');
+        }
+
+        currentOrgUrl = normalizedOrgUrl;
+
+        showLoading('Reconnecting...', 'Loading environment details');
+        await getEnvironmentName();
+
+        hideLoading();
+
+        document.getElementById('authSection').classList.add('hidden');
+        document.getElementById('appsSection').classList.remove('hidden');
+
+        await loadApplications();
+
+        console.log('Auto-login successful for', accounts[0].username);
+    } catch (e) {
+        // Silent acquisition failed — token expired or revoked, user must log in again
+        console.log('Auto-login failed, user will log in manually:', e.message);
+        hideLoading();
+        msalInstance = null;
+        ppToken = null;
+        environmentId = null;
     }
 }
 
@@ -1163,7 +1239,11 @@ function handleLogout() {
         if (msalInstance) {
             const accounts = msalInstance.getAllAccounts();
             if (accounts.length > 0) {
+                // Clear MSAL cache so auto-login won't fire again
                 msalInstance.logoutPopup({ account: accounts[0] }).catch(() => {});
+            } else {
+                // No accounts but clear cache anyway
+                msalInstance.clearCache().catch(() => {});
             }
         }
         
