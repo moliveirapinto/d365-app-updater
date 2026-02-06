@@ -51,7 +51,7 @@ function loadSavedCredentials() {
     if (savedCreds) {
         try {
             const creds = JSON.parse(savedCreds);
-            document.getElementById('organizationId').value = creds.organizationId || '';
+            document.getElementById('orgUrl').value = creds.orgUrl || '';
             document.getElementById('tenantId').value = creds.tenantId || '';
             document.getElementById('clientId').value = creds.clientId || '';
             document.getElementById('rememberMe').checked = true;
@@ -63,19 +63,30 @@ function loadSavedCredentials() {
 async function handleAuthentication(event) {
     event.preventDefault();
     
-    const orgIdValue = document.getElementById('organizationId').value.trim();
+    let orgUrlValue = document.getElementById('orgUrl').value.trim();
     const tenantId = document.getElementById('tenantId').value.trim();
     const clientId = document.getElementById('clientId').value.trim();
     const rememberMe = document.getElementById('rememberMe').checked;
     
     const guidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-    if (!guidRegex.test(tenantId) || !guidRegex.test(clientId) || !guidRegex.test(orgIdValue)) {
-        showError('Invalid GUID format. All IDs must be valid GUIDs.');
+    if (!guidRegex.test(tenantId) || !guidRegex.test(clientId)) {
+        showError('Invalid GUID format. Tenant ID and Client ID must be valid GUIDs.');
+        return;
+    }
+    
+    // Normalize the org URL
+    if (!orgUrlValue.startsWith('https://')) {
+        orgUrlValue = 'https://' + orgUrlValue;
+    }
+    orgUrlValue = orgUrlValue.replace(/\/+$/, ''); // remove trailing slashes
+    
+    if (!orgUrlValue.includes('.dynamics.com')) {
+        showError('Invalid Organization URL. It should look like https://yourorg.crm.dynamics.com');
         return;
     }
     
     if (rememberMe) {
-        localStorage.setItem('d365_app_updater_creds', JSON.stringify({ organizationId: orgIdValue, tenantId, clientId }));
+        localStorage.setItem('d365_app_updater_creds', JSON.stringify({ orgUrl: orgUrlValue, tenantId, clientId }));
     }
     
     try {
@@ -104,15 +115,15 @@ async function handleAuthentication(event) {
         
         console.log('Power Platform API token acquired');
         
-        // Resolve Organization ID to Environment ID via BAP API
-        showLoading('Authenticating...', 'Resolving Organization ID to Environment...');
-        environmentId = await resolveOrgIdToEnvironmentId(orgIdValue);
+        // Resolve Organization URL to Environment ID via BAP API
+        showLoading('Authenticating...', 'Resolving Organization URL to Environment...');
+        environmentId = await resolveOrgUrlToEnvironmentId(orgUrlValue);
         
         if (!environmentId) {
-            throw new Error('Could not find a Power Platform environment matching Organization ID: ' + orgIdValue + '. Make sure you have admin access to the environment.');
+            throw new Error('Could not find a Power Platform environment matching URL: ' + orgUrlValue + '. Make sure you have admin access to the environment.');
         }
         
-        console.log('Resolved Org ID', orgIdValue, '→ Environment ID:', environmentId);
+        console.log('Resolved Org URL', orgUrlValue, '→ Environment ID:', environmentId);
         
         // Get environment name from BAP API (optional, just for display)
         showLoading('Loading...', 'Getting environment details');
@@ -132,11 +143,14 @@ async function handleAuthentication(event) {
     }
 }
 
-// Resolve an Organization ID (Dynamics 365 Org ID) to a Power Platform Environment ID
-async function resolveOrgIdToEnvironmentId(orgId) {
+// Resolve an Organization URL (e.g. https://orgname.crm.dynamics.com) to a Power Platform Environment ID
+async function resolveOrgUrlToEnvironmentId(orgUrl) {
     const bapToken = await getBAPToken();
     
-    // List all environments and find the one whose linkedEnvironmentMetadata.resourceId matches the Org ID
+    // Normalize for comparison: lowercase, no trailing slash
+    const normalizedInput = orgUrl.toLowerCase().replace(/\/+$/, '');
+    
+    // List all environments and find the one whose instanceUrl matches
     const response = await fetch('https://api.bap.microsoft.com/providers/Microsoft.BusinessAppPlatform/scopes/admin/environments?api-version=2021-04-01', {
         headers: { 'Authorization': `Bearer ${bapToken}` }
     });
@@ -148,22 +162,24 @@ async function resolveOrgIdToEnvironmentId(orgId) {
     
     const data = await response.json();
     const environments = data.value || [];
-    console.log('Found', environments.length, 'environments, searching for Org ID:', orgId);
+    console.log('Found', environments.length, 'environments, searching for URL:', orgUrl);
     
     for (const env of environments) {
-        const resourceId = env.properties?.linkedEnvironmentMetadata?.resourceId;
         const instanceUrl = env.properties?.linkedEnvironmentMetadata?.instanceUrl;
         const envName = env.properties?.displayName || env.name;
         
-        console.log(`  Environment: ${envName} (${env.name}), resourceId: ${resourceId}`);
-        
-        if (resourceId && resourceId.toLowerCase() === orgId.toLowerCase()) {
-            console.log('  ✓ Match found! Environment ID:', env.name);
-            return env.name; // env.name is the Environment ID (GUID)
+        if (instanceUrl) {
+            const normalizedInstance = instanceUrl.toLowerCase().replace(/\/+$/, '');
+            console.log(`  Environment: ${envName} (${env.name}), instanceUrl: ${instanceUrl}`);
+            
+            if (normalizedInstance === normalizedInput) {
+                console.log('  ✓ Match found! Environment ID:', env.name);
+                return env.name; // env.name is the Environment ID (GUID)
+            }
         }
     }
     
-    console.error('No environment found matching Org ID:', orgId);
+    console.error('No environment found matching URL:', orgUrl);
     return null;
 }
 
