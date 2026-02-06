@@ -1,0 +1,349 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Admin Dashboard — D365 App Updater</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+    <style>
+        * { font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
+        body { background: #f5f6f8; min-height: 100vh; }
+
+        /* Top nav */
+        .admin-nav {
+            background: #0078d4;
+            color: white;
+            padding: 0.75rem 1.5rem;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.12);
+        }
+        .admin-nav h1 { font-size: 1.1rem; font-weight: 600; margin: 0; }
+        .admin-nav a { color: rgba(255,255,255,0.85); text-decoration: none; font-size: 0.875rem; }
+        .admin-nav a:hover { color: white; }
+
+        /* Config bar */
+        .config-bar {
+            background: white;
+            border-bottom: 1px solid #e5e7eb;
+            padding: 0.75rem 1.5rem;
+        }
+        .config-bar input {
+            font-size: 0.8rem;
+            border: 1px solid #d1d5db;
+            border-radius: 6px;
+            padding: 0.35rem 0.65rem;
+            max-width: 340px;
+        }
+        .config-bar .btn-sm { font-size: 0.8rem; }
+        .config-saved { color: #28a745; font-size: 0.8rem; display: none; }
+
+        /* Stat cards */
+        .stat-card {
+            background: white;
+            border-radius: 12px;
+            padding: 1.25rem;
+            border: 1px solid #e5e7eb;
+            transition: box-shadow 0.2s;
+        }
+        .stat-card:hover { box-shadow: 0 4px 12px rgba(0,0,0,0.06); }
+        .stat-card .stat-value { font-size: 2rem; font-weight: 700; color: #1a1a1a; }
+        .stat-card .stat-label { font-size: 0.8rem; color: #6b7280; text-transform: uppercase; letter-spacing: 0.05em; }
+        .stat-card .stat-icon { width: 44px; height: 44px; border-radius: 10px; display: flex; align-items: center; justify-content: center; font-size: 1.2rem; }
+        .stat-icon.blue { background: #e8f4fd; color: #0078d4; }
+        .stat-icon.green { background: #e6f9ee; color: #28a745; }
+        .stat-icon.red { background: #fdeced; color: #dc3545; }
+        .stat-icon.purple { background: #f0e6fd; color: #7c3aed; }
+        .stat-icon.orange { background: #fff3e0; color: #f57c00; }
+
+        /* View toggle */
+        .view-toggle .btn { font-size: 0.85rem; padding: 0.4rem 1rem; border-radius: 8px; }
+        .view-toggle .btn.active { background: #0078d4; color: white; border-color: #0078d4; }
+
+        /* Chart containers */
+        .chart-card {
+            background: white;
+            border-radius: 12px;
+            border: 1px solid #e5e7eb;
+            padding: 1.5rem;
+        }
+        .chart-card h5 { font-size: 0.95rem; font-weight: 600; color: #1a1a1a; margin-bottom: 1rem; }
+
+        /* Table */
+        .table-card {
+            background: white;
+            border-radius: 12px;
+            border: 1px solid #e5e7eb;
+            overflow: hidden;
+        }
+        .table-card .table { margin: 0; font-size: 0.85rem; }
+        .table-card thead th {
+            background: #f9fafb;
+            border-bottom: 2px solid #e5e7eb;
+            font-weight: 600;
+            font-size: 0.78rem;
+            text-transform: uppercase;
+            letter-spacing: 0.04em;
+            color: #6b7280;
+            padding: 0.75rem 1rem;
+            white-space: nowrap;
+            cursor: pointer;
+            user-select: none;
+        }
+        .table-card thead th:hover { color: #0078d4; }
+        .table-card thead th .sort-icon { font-size: 0.65rem; margin-left: 4px; opacity: 0.4; }
+        .table-card thead th.sorted .sort-icon { opacity: 1; color: #0078d4; }
+        .table-card tbody td { padding: 0.65rem 1rem; vertical-align: middle; border-bottom: 1px solid #f3f4f6; }
+        .table-card tbody tr:hover { background: #f9fafb; }
+        .badge-success-count { background: #e6f9ee; color: #166534; font-weight: 600; }
+        .badge-fail-count { background: #fdeced; color: #991b1b; font-weight: 600; }
+
+        /* Filters */
+        .filter-bar { padding: 1rem 1.25rem; border-bottom: 1px solid #e5e7eb; background: #f9fafb; }
+        .filter-bar input, .filter-bar select { font-size: 0.82rem; border: 1px solid #d1d5db; border-radius: 6px; padding: 0.35rem 0.65rem; }
+        .filter-bar label { font-size: 0.78rem; color: #6b7280; font-weight: 500; }
+
+        /* Empty state */
+        .empty-state { text-align: center; padding: 4rem 2rem; color: #9ca3af; }
+        .empty-state i { font-size: 3rem; margin-bottom: 1rem; }
+        .empty-state h4 { color: #6b7280; font-weight: 600; }
+
+        /* Pagination */
+        .pagination-bar { padding: 0.75rem 1.25rem; border-top: 1px solid #e5e7eb; background: #f9fafb; font-size: 0.82rem; }
+        .pagination-bar select { font-size: 0.82rem; border: 1px solid #d1d5db; border-radius: 6px; padding: 0.25rem 0.5rem; }
+
+        /* Loading */
+        .admin-loading { text-align: center; padding: 3rem; color: #6b7280; }
+        .admin-loading .spinner-border { width: 2.5rem; height: 2.5rem; }
+    </style>
+</head>
+<body>
+    <!-- Top Navigation -->
+    <div class="admin-nav">
+        <div class="d-flex align-items-center gap-3">
+            <div style="width: 36px; height: 36px; background: rgba(255,255,255,0.15); border-radius: 8px; display: flex; align-items: center; justify-content: center;">
+                <i class="fas fa-chart-bar"></i>
+            </div>
+            <h1>Admin Dashboard</h1>
+        </div>
+        <a href="index.html"><i class="fas fa-arrow-left me-1"></i> Back to App</a>
+    </div>
+
+    <!-- Supabase Config Bar -->
+    <div class="config-bar" id="configBar">
+        <div class="d-flex align-items-center gap-2 flex-wrap">
+            <label class="text-muted" style="font-size:0.8rem; white-space:nowrap;"><i class="fas fa-database me-1"></i>Supabase:</label>
+            <input type="text" id="cfgUrl" placeholder="Project URL (https://xxx.supabase.co)" class="form-control form-control-sm">
+            <input type="text" id="cfgKey" placeholder="anon / service_role key" class="form-control form-control-sm">
+            <button class="btn btn-primary btn-sm" onclick="saveConfig()"><i class="fas fa-plug me-1"></i>Connect</button>
+            <span class="config-saved" id="configSaved"><i class="fas fa-check me-1"></i>Connected</span>
+        </div>
+    </div>
+
+    <!-- Main Content -->
+    <div class="container-fluid px-4 py-4" id="mainContent" style="display:none;">
+
+        <!-- Stat Cards Row -->
+        <div class="row g-3 mb-4" id="statCards">
+            <div class="col-6 col-md-4 col-xl">
+                <div class="stat-card">
+                    <div class="d-flex align-items-center justify-content-between">
+                        <div>
+                            <div class="stat-label">Total Sessions</div>
+                            <div class="stat-value" id="statSessions">—</div>
+                        </div>
+                        <div class="stat-icon blue"><i class="fas fa-calendar-check"></i></div>
+                    </div>
+                </div>
+            </div>
+            <div class="col-6 col-md-4 col-xl">
+                <div class="stat-card">
+                    <div class="d-flex align-items-center justify-content-between">
+                        <div>
+                            <div class="stat-label">Unique Users</div>
+                            <div class="stat-value" id="statUsers">—</div>
+                        </div>
+                        <div class="stat-icon purple"><i class="fas fa-users"></i></div>
+                    </div>
+                </div>
+            </div>
+            <div class="col-6 col-md-4 col-xl">
+                <div class="stat-card">
+                    <div class="d-flex align-items-center justify-content-between">
+                        <div>
+                            <div class="stat-label">Environments</div>
+                            <div class="stat-value" id="statEnvs">—</div>
+                        </div>
+                        <div class="stat-icon orange"><i class="fas fa-globe"></i></div>
+                    </div>
+                </div>
+            </div>
+            <div class="col-6 col-md-4 col-xl">
+                <div class="stat-card">
+                    <div class="d-flex align-items-center justify-content-between">
+                        <div>
+                            <div class="stat-label">Apps Updated</div>
+                            <div class="stat-value" id="statSuccess">—</div>
+                        </div>
+                        <div class="stat-icon green"><i class="fas fa-check-circle"></i></div>
+                    </div>
+                </div>
+            </div>
+            <div class="col-6 col-md-4 col-xl">
+                <div class="stat-card">
+                    <div class="d-flex align-items-center justify-content-between">
+                        <div>
+                            <div class="stat-label">Failed Updates</div>
+                            <div class="stat-value" id="statFailed">—</div>
+                        </div>
+                        <div class="stat-icon red"><i class="fas fa-times-circle"></i></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- View Toggle -->
+        <div class="d-flex align-items-center justify-content-between mb-3">
+            <h5 class="mb-0" style="font-weight:600; font-size:1rem;">Usage History</h5>
+            <div class="view-toggle btn-group">
+                <button class="btn btn-outline-secondary active" onclick="switchView('dashboard')" id="btnDashboard">
+                    <i class="fas fa-chart-pie me-1"></i> Dashboard
+                </button>
+                <button class="btn btn-outline-secondary" onclick="switchView('table')" id="btnTable">
+                    <i class="fas fa-table me-1"></i> Table
+                </button>
+            </div>
+        </div>
+
+        <!-- Dashboard View -->
+        <div id="viewDashboard">
+            <div class="row g-3 mb-4">
+                <div class="col-md-8">
+                    <div class="chart-card">
+                        <h5><i class="fas fa-chart-line me-2 text-primary"></i>Updates Over Time</h5>
+                        <canvas id="chartTimeline" height="260"></canvas>
+                    </div>
+                </div>
+                <div class="col-md-4">
+                    <div class="chart-card">
+                        <h5><i class="fas fa-chart-doughnut me-2 text-success"></i>Success vs Failed</h5>
+                        <canvas id="chartSuccessFail" height="260"></canvas>
+                    </div>
+                </div>
+            </div>
+            <div class="row g-3 mb-4">
+                <div class="col-md-6">
+                    <div class="chart-card">
+                        <h5><i class="fas fa-building me-2 text-warning"></i>Top Environments</h5>
+                        <canvas id="chartEnvs" height="220"></canvas>
+                    </div>
+                </div>
+                <div class="col-md-6">
+                    <div class="chart-card">
+                        <h5><i class="fas fa-user me-2 text-info"></i>Top Users</h5>
+                        <canvas id="chartUsers" height="220"></canvas>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Recent Activity -->
+            <div class="chart-card">
+                <h5><i class="fas fa-clock me-2 text-secondary"></i>Recent Activity</h5>
+                <div id="recentActivity"></div>
+            </div>
+        </div>
+
+        <!-- Table View -->
+        <div id="viewTable" style="display:none;">
+            <div class="table-card">
+                <!-- Filters -->
+                <div class="filter-bar d-flex align-items-end gap-3 flex-wrap">
+                    <div>
+                        <label>Search</label><br>
+                        <input type="text" id="filterSearch" placeholder="User, org URL..." oninput="applyFilters()">
+                    </div>
+                    <div>
+                        <label>Date From</label><br>
+                        <input type="date" id="filterFrom" onchange="applyFilters()">
+                    </div>
+                    <div>
+                        <label>Date To</label><br>
+                        <input type="date" id="filterTo" onchange="applyFilters()">
+                    </div>
+                    <div>
+                        <label>Status</label><br>
+                        <select id="filterStatus" onchange="applyFilters()">
+                            <option value="">All</option>
+                            <option value="success">Has Successes</option>
+                            <option value="failed">Has Failures</option>
+                        </select>
+                    </div>
+                    <div>
+                        <button class="btn btn-outline-secondary btn-sm" onclick="clearFilters()"><i class="fas fa-times me-1"></i>Clear</button>
+                    </div>
+                    <div class="ms-auto">
+                        <button class="btn btn-outline-primary btn-sm" onclick="exportCSV()"><i class="fas fa-download me-1"></i>Export CSV</button>
+                    </div>
+                </div>
+
+                <!-- Table -->
+                <div class="table-responsive">
+                    <table class="table table-hover mb-0">
+                        <thead>
+                            <tr>
+                                <th onclick="sortTable('timestamp')">Date & Time <i class="fas fa-sort sort-icon"></i></th>
+                                <th onclick="sortTable('user_email')">User <i class="fas fa-sort sort-icon"></i></th>
+                                <th onclick="sortTable('org_url')">Organization URL <i class="fas fa-sort sort-icon"></i></th>
+                                <th onclick="sortTable('success_count')" class="text-center">Succeeded <i class="fas fa-sort sort-icon"></i></th>
+                                <th onclick="sortTable('fail_count')" class="text-center">Failed <i class="fas fa-sort sort-icon"></i></th>
+                                <th onclick="sortTable('total_apps')" class="text-center">Total <i class="fas fa-sort sort-icon"></i></th>
+                                <th>Details</th>
+                            </tr>
+                        </thead>
+                        <tbody id="tableBody"></tbody>
+                    </table>
+                </div>
+
+                <!-- Pagination -->
+                <div class="pagination-bar d-flex align-items-center justify-content-between">
+                    <div class="text-muted">
+                        Showing <span id="pageInfo">0-0 of 0</span>
+                    </div>
+                    <div class="d-flex align-items-center gap-2">
+                        <label class="text-muted">Per page:</label>
+                        <select id="pageSize" onchange="applyFilters()">
+                            <option value="25">25</option>
+                            <option value="50">50</option>
+                            <option value="100">100</option>
+                        </select>
+                        <button class="btn btn-outline-secondary btn-sm" id="btnPrev" onclick="changePage(-1)" disabled><i class="fas fa-chevron-left"></i></button>
+                        <button class="btn btn-outline-secondary btn-sm" id="btnNext" onclick="changePage(1)"><i class="fas fa-chevron-right"></i></button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Loading state -->
+    <div class="admin-loading" id="adminLoading" style="display:none;">
+        <div class="spinner-border text-primary mb-3"></div>
+        <p>Loading usage data...</p>
+    </div>
+
+    <!-- Empty state (no config) -->
+    <div class="empty-state" id="emptyState" style="display:none;">
+        <i class="fas fa-database"></i>
+        <h4>Connect to Supabase</h4>
+        <p>Enter your Supabase project URL and key above to view usage analytics.</p>
+        <p class="text-muted" style="font-size:0.85rem;">
+            Need to set up Supabase? See <a href="SUPABASE_SETUP.md">setup instructions</a>.
+        </p>
+    </div>
+
+    <script src="admin.js"></script>
+</body>
+</html>

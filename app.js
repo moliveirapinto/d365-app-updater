@@ -2,7 +2,11 @@
 let msalInstance = null;
 let ppToken = null; // Power Platform API token
 let environmentId = null;
+let currentOrgUrl = null;
 let apps = [];
+
+// Supabase config for usage tracking
+const SUPABASE_CONFIG_KEY = 'd365_admin_supabase';
 
 // MSAL Configuration
 function createMsalConfig(tenantId, clientId) {
@@ -125,6 +129,7 @@ async function handleAuthentication(event) {
         }
         
         console.log('Resolved Org URL', orgUrlValue, '→ Environment ID:', environmentId);
+        currentOrgUrl = orgUrlValue;
         
         // Get environment name from BAP API (optional, just for display)
         showLoading('Loading...', 'Getting environment details');
@@ -887,6 +892,7 @@ async function updateSingleApp(uniqueName) {
         app.updateState = 'submitted';
         app.hasUpdate = false; // Don't count it as a pending update anymore
         displayApplications();
+        logUsage(1, 0, [app.name]);
         
     } catch (error) {
         console.error('Update error:', error);
@@ -894,6 +900,7 @@ async function updateSingleApp(uniqueName) {
         app.updateError = error.message;
         app.hasUpdate = true; // Keep as updatable so retry is possible
         displayApplications();
+        logUsage(0, 1, [app.name]);
     }
 }
 
@@ -1053,6 +1060,9 @@ async function updateAllApps() {
     hideLoading();
     displayApplications();
     
+    // Log usage to Supabase
+    logUsage(successCount, failCount, appsToUpdate.map(a => a.name));
+    
     if (failCount === 0) {
         await showAlert('Updates Started', 'All ' + successCount + ' updates submitted successfully! Updates are running in the background and may take several minutes. Click "Refresh" to check progress.', 'success');
     } else {
@@ -1130,6 +1140,9 @@ async function reinstallAllApps() {
     hideLoading();
     displayApplications();
     
+    // Log usage to Supabase
+    logUsage(successCount, failCount, appsToUpdate.map(a => a.name));
+    
     if (failCount === 0) {
         await showAlert('Updates Submitted', 'All ' + successCount + ' update requests submitted! Updates are running in the background. Click "Refresh" to check progress.', 'success');
     } else {
@@ -1156,6 +1169,68 @@ function handleLogout() {
         document.getElementById('appsSection').classList.add('hidden');
         document.getElementById('authSection').classList.remove('hidden');
     });
+}
+
+// ── Usage Tracking (Supabase) ─────────────────────────────────
+function getSupabaseConfig() {
+    try {
+        const saved = localStorage.getItem(SUPABASE_CONFIG_KEY);
+        if (!saved) return null;
+        const cfg = JSON.parse(saved);
+        if (!cfg.url || !cfg.key) return null;
+        return { url: cfg.url.replace(/\/+$/, ''), key: cfg.key };
+    } catch (e) {
+        return null;
+    }
+}
+
+function getCurrentUserEmail() {
+    if (!msalInstance) return null;
+    const accounts = msalInstance.getAllAccounts();
+    if (accounts.length > 0) {
+        return accounts[0].username || accounts[0].name || null;
+    }
+    return null;
+}
+
+async function logUsage(successCount, failCount, appNames) {
+    const cfg = getSupabaseConfig();
+    if (!cfg) {
+        console.log('Usage tracking: Supabase not configured, skipping.');
+        return;
+    }
+
+    const record = {
+        timestamp: new Date().toISOString(),
+        user_email: getCurrentUserEmail() || 'unknown',
+        org_url: currentOrgUrl || '',
+        environment_id: environmentId || '',
+        success_count: successCount || 0,
+        fail_count: failCount || 0,
+        total_apps: (successCount || 0) + (failCount || 0),
+        app_names: (appNames || []).join(', ')
+    };
+
+    try {
+        const resp = await fetch(`${cfg.url}/rest/v1/usage_logs`, {
+            method: 'POST',
+            headers: {
+                'apikey': cfg.key,
+                'Authorization': `Bearer ${cfg.key}`,
+                'Content-Type': 'application/json',
+                'Prefer': 'return=minimal'
+            },
+            body: JSON.stringify(record)
+        });
+
+        if (resp.ok) {
+            console.log('Usage logged successfully:', record);
+        } else {
+            console.warn('Usage logging failed:', resp.status, await resp.text());
+        }
+    } catch (error) {
+        console.warn('Usage logging error (non-critical):', error.message);
+    }
 }
 
 // UI Helpers
