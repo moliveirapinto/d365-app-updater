@@ -295,8 +295,23 @@ async function loadApplications() {
         );
         console.log('All catalog packages fetched:', allAppsRaw.length);
         
+        // ── Step 2b: Fetch NotInstalled packages specifically (update packages) ──
+        showLoading('Loading applications...', 'Fetching update packages...');
+        let notInstalledRaw = [];
+        try {
+            notInstalledRaw = await fetchAllPages(
+                `${baseUrl}?appInstallState=NotInstalled&${apiVersion}`, ppToken
+            );
+            console.log('NotInstalled packages fetched:', notInstalledRaw.length);
+        } catch (e) {
+            console.warn('NotInstalled fetch failed (non-critical):', e.message);
+        }
+        
+        // Merge all catalog sources
+        const allCatalogEntries = [...allAppsRaw, ...notInstalledRaw];
+        
         // Debug: log unique states and sample data
-        const states = [...new Set(allAppsRaw.map(a => a.state))];
+        const states = [...new Set(allCatalogEntries.map(a => a.state))];
         console.log('All states found in catalog:', states);
         if (installedAppsRaw.length > 0) {
             console.log('Sample installed app fields:', Object.keys(installedAppsRaw[0]));
@@ -306,7 +321,7 @@ async function loadApplications() {
         // ── Step 3: Build version maps from ALL catalog entries ──────
         // Map by applicationId → keep highest version
         const catalogMapById = new Map();
-        for (const app of allAppsRaw) {
+        for (const app of allCatalogEntries) {
             if (!app.applicationId) continue;
             const existing = catalogMapById.get(app.applicationId);
             if (!existing || compareVersions(app.version, existing.version) > 0) {
@@ -316,12 +331,23 @@ async function loadApplications() {
         
         // Map by uniqueName base → keep highest version (fallback matching)
         const catalogByName = new Map();
-        for (const app of allAppsRaw) {
+        for (const app of allCatalogEntries) {
             if (!app.uniqueName) continue;
             const baseName = app.uniqueName.replace(/_upgrade$/i, '').replace(/_\d+$/, '');
             const existing = catalogByName.get(baseName);
             if (!existing || compareVersions(app.version, existing.version) > 0) {
                 catalogByName.set(baseName, app);
+            }
+        }
+        
+        // Map by display name → keep highest version
+        const catalogByDisplayName = new Map();
+        for (const app of allCatalogEntries) {
+            const name = (app.localizedName || app.applicationName || '').toLowerCase();
+            if (!name) continue;
+            const existing = catalogByDisplayName.get(name);
+            if (!existing || compareVersions(app.version, existing.version) > 0) {
+                catalogByDisplayName.set(name, app);
             }
         }
         
@@ -335,12 +361,25 @@ async function loadApplications() {
             let latestVersion = null;
             let catalogUniqueName = null;
             
+            // Check 0: State-based detection — API may directly flag updates
+            const stateLower = (app.state || '').toLowerCase();
+            if (stateLower.includes('update') || stateLower === 'updateavailable' || stateLower === 'installedwithupdateavailable') {
+                hasUpdate = true;
+                console.log(`  [by state="${app.state}"] ${app.localizedName || app.uniqueName}`);
+            }
+            
             // Check 1: Direct API fields that might indicate update availability
-            if (app.updateAvailable || app.catalogVersion || app.availableVersion || app.latestVersion) {
-                const directVersion = app.catalogVersion || app.availableVersion || app.latestVersion;
+            if (app.updateAvailable || app.catalogVersion || app.availableVersion || app.latestVersion || app.newVersion || app.updateVersion) {
+                const directVersion = app.catalogVersion || app.availableVersion || app.latestVersion || app.newVersion || app.updateVersion;
                 if (directVersion && compareVersions(directVersion, app.version) > 0) {
                     hasUpdate = true;
                     latestVersion = directVersion;
+                    console.log(`  [direct field] ${app.localizedName || app.uniqueName}: ${app.version} → ${latestVersion}`);
+                }
+                // updateAvailable might be a boolean
+                if (app.updateAvailable === true && !latestVersion) {
+                    hasUpdate = true;
+                    console.log(`  [updateAvailable=true] ${app.localizedName || app.uniqueName}`);
                 }
             }
             
@@ -367,6 +406,23 @@ async function loadApplications() {
                 }
             }
             
+            // Check 4: Compare with catalog entry by localizedName / applicationName
+            if (!hasUpdate) {
+                const appName = (app.localizedName || app.applicationName || '').toLowerCase();
+                if (appName) {
+                    for (const [, catApp] of catalogMapById) {
+                        const catName = (catApp.localizedName || catApp.applicationName || '').toLowerCase();
+                        if (catName === appName && compareVersions(catApp.version, app.version) > 0) {
+                            hasUpdate = true;
+                            latestVersion = catApp.version;
+                            catalogUniqueName = catApp.uniqueName;
+                            console.log(`  [by displayName] ${app.localizedName || app.uniqueName}: ${app.version} → ${latestVersion}`);
+                            break;
+                        }
+                    }
+                }
+            }
+            
             if (hasUpdate) updatesFound++;
             
             return {
@@ -388,95 +444,192 @@ async function loadApplications() {
         
         console.log('Updates found from PP API:', updatesFound);
         
-        // ── Step 5: If PP API found zero updates, try BAP Admin API ──
-        if (updatesFound === 0 && installedAppsRaw.length > 0) {
-            console.log('No updates found via PP API. Trying BAP Admin API as fallback...');
-            showLoading('Loading applications...', 'Checking for updates via Admin API...');
+        // ── Step 5: ALWAYS check BAP Admin API for additional updates ──
+        // The BAP API can detect updates that the PP API misses
+        console.log('Checking BAP Admin API for additional updates...');
+        showLoading('Loading applications...', 'Cross-checking updates via Admin API...');
+        
+        try {
+            const bapToken = await getBAPToken();
+            const bapUrl = `https://api.bap.microsoft.com/providers/Microsoft.BusinessAppPlatform/scopes/admin/environments/${environmentId}/applicationPackages?api-version=2021-04-01`;
+            const bapApps = await fetchAllPages(bapUrl, bapToken);
             
-            try {
-                const bapToken = await getBAPToken();
-                const bapUrl = `https://api.bap.microsoft.com/providers/Microsoft.BusinessAppPlatform/scopes/admin/environments/${environmentId}/applicationPackages?api-version=2021-04-01`;
-                const bapApps = await fetchAllPages(bapUrl, bapToken);
-                
-                console.log('BAP API returned:', bapApps.length, 'packages');
-                if (bapApps.length > 0) {
-                    console.log('BAP sample app fields:', Object.keys(bapApps[0]));
-                    console.log('BAP sample app:', JSON.stringify(bapApps[0], null, 2));
-                }
-                
-                // Build BAP catalog map by applicationId (keep highest version)
-                const bapCatalogMap = new Map();
-                for (const bapApp of bapApps) {
-                    if (!bapApp.applicationId) continue;
-                    const existing = bapCatalogMap.get(bapApp.applicationId);
-                    if (!existing || compareVersions(bapApp.version, existing.version) > 0) {
-                        bapCatalogMap.set(bapApp.applicationId, bapApp);
-                    }
-                }
-                
-                // Also build by uniqueName base
-                const bapByName = new Map();
-                for (const bapApp of bapApps) {
-                    if (!bapApp.uniqueName) continue;
-                    const baseName = bapApp.uniqueName.replace(/_upgrade$/i, '').replace(/_\d+$/, '');
-                    const existing = bapByName.get(baseName);
-                    if (!existing || compareVersions(bapApp.version, existing.version) > 0) {
-                        bapByName.set(baseName, bapApp);
-                    }
-                }
-                
-                // Re-check installed apps against BAP data
-                for (const app of apps) {
-                    if (app.hasUpdate) continue;
-                    
-                    // Check direct fields from BAP response for this app
-                    const bapInstalled = bapApps.find(b => 
-                        (b.applicationId === app.applicationId) && 
-                        (b.state === 'Installed' || b.instancePackageId)
-                    );
-                    if (bapInstalled) {
-                        // Check if BAP provides update info directly
-                        const directVer = bapInstalled.catalogVersion || bapInstalled.availableVersion || bapInstalled.latestVersion;
-                        if (directVer && compareVersions(directVer, app.version) > 0) {
-                            app.hasUpdate = true;
-                            app.latestVersion = directVer;
-                            updatesFound++;
-                            console.log(`  [BAP direct] ${app.name}: ${app.version} → ${directVer}`);
-                            continue;
-                        }
-                    }
-                    
-                    // Compare by applicationId
-                    if (app.applicationId) {
-                        const bapEntry = bapCatalogMap.get(app.applicationId);
-                        if (bapEntry && compareVersions(bapEntry.version, app.version) > 0) {
-                            app.hasUpdate = true;
-                            app.latestVersion = bapEntry.version;
-                            app.catalogUniqueName = bapEntry.uniqueName || app.uniqueName;
-                            updatesFound++;
-                            console.log(`  [BAP by appId] ${app.name}: ${app.version} → ${bapEntry.version}`);
-                            continue;
-                        }
-                    }
-                    
-                    // Compare by uniqueName
-                    if (app.uniqueName) {
-                        const baseName = app.uniqueName.replace(/_upgrade$/i, '').replace(/_\d+$/, '');
-                        const bapByNameEntry = bapByName.get(baseName);
-                        if (bapByNameEntry && compareVersions(bapByNameEntry.version, app.version) > 0) {
-                            app.hasUpdate = true;
-                            app.latestVersion = bapByNameEntry.version;
-                            app.catalogUniqueName = bapByNameEntry.uniqueName || app.uniqueName;
-                            updatesFound++;
-                            console.log(`  [BAP by name] ${app.name}: ${app.version} → ${bapByNameEntry.version}`);
-                        }
-                    }
-                }
-                
-                console.log('Updates found after BAP fallback:', updatesFound);
-            } catch (bapError) {
-                console.warn('BAP API fallback failed (non-critical):', bapError.message);
+            console.log('BAP API returned:', bapApps.length, 'packages');
+            if (bapApps.length > 0) {
+                console.log('BAP sample app fields:', Object.keys(bapApps[0]));
+                // Log first 3 samples for debugging
+                bapApps.slice(0, 3).forEach((a, i) => console.log(`BAP sample ${i}:`, JSON.stringify(a, null, 2)));
             }
+            
+            // Build BAP catalog map by applicationId (keep highest version)
+            const bapCatalogMap = new Map();
+            for (const bapApp of bapApps) {
+                if (!bapApp.applicationId) continue;
+                const existing = bapCatalogMap.get(bapApp.applicationId);
+                if (!existing || compareVersions(bapApp.version, existing.version) > 0) {
+                    bapCatalogMap.set(bapApp.applicationId, bapApp);
+                }
+            }
+            
+            // Also build by uniqueName base
+            const bapByName = new Map();
+            for (const bapApp of bapApps) {
+                if (!bapApp.uniqueName) continue;
+                const baseName = bapApp.uniqueName.replace(/_upgrade$/i, '').replace(/_\d+$/, '');
+                const existing = bapByName.get(baseName);
+                if (!existing || compareVersions(bapApp.version, existing.version) > 0) {
+                    bapByName.set(baseName, bapApp);
+                }
+            }
+            
+            // Also build by display name
+            const bapByDisplayName = new Map();
+            for (const bapApp of bapApps) {
+                const name = (bapApp.localizedName || bapApp.applicationName || '').toLowerCase();
+                if (!name) continue;
+                const existing = bapByDisplayName.get(name);
+                if (!existing || compareVersions(bapApp.version, existing.version) > 0) {
+                    bapByDisplayName.set(name, bapApp);
+                }
+            }
+            
+            // Check installed apps that DON'T already have an update detected
+            for (const app of apps) {
+                if (app.hasUpdate) continue;
+                
+                let found = false;
+                
+                // Check direct fields from BAP response for this app
+                const bapInstalled = bapApps.find(b => 
+                    (b.applicationId === app.applicationId) && 
+                    (b.state === 'Installed' || b.instancePackageId)
+                );
+                if (bapInstalled) {
+                    // State-based detection
+                    const bapState = (bapInstalled.state || '').toLowerCase();
+                    if (bapState.includes('update') || bapState === 'updateavailable') {
+                        app.hasUpdate = true;
+                        found = true;
+                        console.log(`  [BAP state="${bapInstalled.state}"] ${app.name}`);
+                    }
+                    // Check if BAP provides update info directly
+                    const directVer = bapInstalled.catalogVersion || bapInstalled.availableVersion || bapInstalled.latestVersion || bapInstalled.newVersion || bapInstalled.updateVersion;
+                    if (directVer && compareVersions(directVer, app.version) > 0) {
+                        app.hasUpdate = true;
+                        app.latestVersion = directVer;
+                        found = true;
+                        console.log(`  [BAP direct] ${app.name}: ${app.version} → ${directVer}`);
+                    }
+                    if (bapInstalled.updateAvailable === true) {
+                        app.hasUpdate = true;
+                        found = true;
+                        console.log(`  [BAP updateAvailable=true] ${app.name}`);
+                    }
+                }
+                
+                // Compare by applicationId
+                if (!found && app.applicationId) {
+                    const bapEntry = bapCatalogMap.get(app.applicationId);
+                    if (bapEntry && compareVersions(bapEntry.version, app.version) > 0) {
+                        app.hasUpdate = true;
+                        app.latestVersion = bapEntry.version;
+                        app.catalogUniqueName = bapEntry.uniqueName || app.uniqueName;
+                        found = true;
+                        console.log(`  [BAP by appId] ${app.name}: ${app.version} → ${bapEntry.version}`);
+                    }
+                }
+                
+                // Compare by uniqueName
+                if (!found && app.uniqueName) {
+                    const baseName = app.uniqueName.replace(/_upgrade$/i, '').replace(/_\d+$/, '');
+                    const bapByNameEntry = bapByName.get(baseName);
+                    if (bapByNameEntry && compareVersions(bapByNameEntry.version, app.version) > 0) {
+                        app.hasUpdate = true;
+                        app.latestVersion = bapByNameEntry.version;
+                        app.catalogUniqueName = bapByNameEntry.uniqueName || app.uniqueName;
+                        found = true;
+                        console.log(`  [BAP by name] ${app.name}: ${app.version} → ${bapByNameEntry.version}`);
+                    }
+                }
+                
+                // Compare by display name
+                if (!found) {
+                    const appDisplayName = (app.name || '').toLowerCase();
+                    if (appDisplayName) {
+                        const bapByDN = bapByDisplayName.get(appDisplayName);
+                        if (bapByDN && compareVersions(bapByDN.version, app.version) > 0) {
+                            app.hasUpdate = true;
+                            app.latestVersion = bapByDN.version;
+                            app.catalogUniqueName = bapByDN.uniqueName || app.uniqueName;
+                            found = true;
+                            console.log(`  [BAP by displayName] ${app.name}: ${app.version} → ${bapByDN.version}`);
+                        }
+                    }
+                }
+                
+                if (found) updatesFound++;
+            }
+            
+            // ── Step 5b: Check for installed apps that BAP knows but PP API missed entirely ──
+            const knownAppIds = new Set(apps.map(a => a.applicationId).filter(Boolean));
+            const knownNames = new Set(apps.map(a => (a.name || '').toLowerCase()).filter(Boolean));
+            
+            for (const bapApp of bapApps) {
+                const bapState = (bapApp.state || '').toLowerCase();
+                const isInstalled = bapState === 'installed' || bapState.includes('update') || bapApp.instancePackageId;
+                if (!isInstalled) continue;
+                
+                // Skip if we already know about this app
+                if (bapApp.applicationId && knownAppIds.has(bapApp.applicationId)) continue;
+                const bapName = (bapApp.localizedName || bapApp.applicationName || '').toLowerCase();
+                if (bapName && knownNames.has(bapName)) continue;
+                
+                // This is an installed app the PP API missed
+                let hasUpdate = false;
+                let latestVersion = null;
+                
+                if (bapState.includes('update') || bapApp.updateAvailable === true) {
+                    hasUpdate = true;
+                }
+                const directVer = bapApp.catalogVersion || bapApp.availableVersion || bapApp.latestVersion || bapApp.newVersion;
+                if (directVer && compareVersions(directVer, bapApp.version) > 0) {
+                    hasUpdate = true;
+                    latestVersion = directVer;
+                }
+                // Check if BAP catalog has a higher version
+                if (!hasUpdate && bapApp.applicationId) {
+                    const bapCatEntry = bapCatalogMap.get(bapApp.applicationId);
+                    if (bapCatEntry && compareVersions(bapCatEntry.version, bapApp.version) > 0) {
+                        hasUpdate = true;
+                        latestVersion = bapCatEntry.version;
+                    }
+                }
+                
+                if (hasUpdate) {
+                    updatesFound++;
+                    console.log(`  [BAP new app] ${bapApp.localizedName || bapApp.uniqueName}: ${bapApp.version} → ${latestVersion || 'update flagged'}`);
+                }
+                
+                apps.push({
+                    id: bapApp.id,
+                    uniqueName: bapApp.uniqueName,
+                    catalogUniqueName: bapApp.uniqueName,
+                    name: bapApp.localizedName || bapApp.applicationName || bapApp.uniqueName || 'Unknown',
+                    version: bapApp.version || 'Unknown',
+                    latestVersion: latestVersion,
+                    state: bapApp.state || 'Installed',
+                    hasUpdate: hasUpdate,
+                    publisher: bapApp.publisherName || 'Microsoft',
+                    description: bapApp.applicationDescription || '',
+                    learnMoreUrl: bapApp.learnMoreUrl || null,
+                    instancePackageId: bapApp.instancePackageId,
+                    applicationId: bapApp.applicationId
+                });
+            }
+            
+            console.log('Total updates found after BAP cross-check:', updatesFound);
+        } catch (bapError) {
+            console.warn('BAP API cross-check failed (non-critical):', bapError.message);
         }
         
         // ── Step 6: Sort — updates first, then alphabetically ────────
@@ -487,10 +640,10 @@ async function loadApplications() {
         });
         
         // Store not-installed apps for browsing
-        const installedAppIds = new Set(installedAppsRaw.map(a => a.applicationId).filter(Boolean));
+        const knownInstalledAppIds = new Set(apps.map(a => a.applicationId).filter(Boolean));
         const notInstalledApps = [];
         for (const [appId, app] of catalogMapById) {
-            if (!installedAppIds.has(appId) && app.state !== 'Installed' && !app.instancePackageId) {
+            if (!knownInstalledAppIds.has(appId) && app.state !== 'Installed' && !app.instancePackageId) {
                 notInstalledApps.push({
                     id: app.id,
                     uniqueName: app.uniqueName,
