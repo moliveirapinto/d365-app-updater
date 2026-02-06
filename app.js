@@ -51,7 +51,7 @@ function loadSavedCredentials() {
     if (savedCreds) {
         try {
             const creds = JSON.parse(savedCreds);
-            document.getElementById('environmentId').value = creds.environmentId || '';
+            document.getElementById('organizationId').value = creds.organizationId || '';
             document.getElementById('tenantId').value = creds.tenantId || '';
             document.getElementById('clientId').value = creds.clientId || '';
             document.getElementById('rememberMe').checked = true;
@@ -63,22 +63,19 @@ function loadSavedCredentials() {
 async function handleAuthentication(event) {
     event.preventDefault();
     
-    const envIdValue = document.getElementById('environmentId').value.trim();
+    const orgIdValue = document.getElementById('organizationId').value.trim();
     const tenantId = document.getElementById('tenantId').value.trim();
     const clientId = document.getElementById('clientId').value.trim();
     const rememberMe = document.getElementById('rememberMe').checked;
     
     const guidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-    if (!guidRegex.test(tenantId) || !guidRegex.test(clientId) || !guidRegex.test(envIdValue)) {
+    if (!guidRegex.test(tenantId) || !guidRegex.test(clientId) || !guidRegex.test(orgIdValue)) {
         showError('Invalid GUID format. All IDs must be valid GUIDs.');
         return;
     }
     
-    // Use the Environment ID directly
-    environmentId = envIdValue;
-    
     if (rememberMe) {
-        localStorage.setItem('d365_app_updater_creds', JSON.stringify({ environmentId: envIdValue, tenantId, clientId }));
+        localStorage.setItem('d365_app_updater_creds', JSON.stringify({ organizationId: orgIdValue, tenantId, clientId }));
     }
     
     try {
@@ -106,7 +103,16 @@ async function handleAuthentication(event) {
         ppToken = ppResult.accessToken;
         
         console.log('Power Platform API token acquired');
-        console.log('Using Environment ID:', environmentId);
+        
+        // Resolve Organization ID to Environment ID via BAP API
+        showLoading('Authenticating...', 'Resolving Organization ID to Environment...');
+        environmentId = await resolveOrgIdToEnvironmentId(orgIdValue);
+        
+        if (!environmentId) {
+            throw new Error('Could not find a Power Platform environment matching Organization ID: ' + orgIdValue + '. Make sure you have admin access to the environment.');
+        }
+        
+        console.log('Resolved Org ID', orgIdValue, '→ Environment ID:', environmentId);
         
         // Get environment name from BAP API (optional, just for display)
         showLoading('Loading...', 'Getting environment details');
@@ -124,6 +130,41 @@ async function handleAuthentication(event) {
         console.error('Auth error:', error);
         showError('Authentication failed: ' + error.message);
     }
+}
+
+// Resolve an Organization ID (Dynamics 365 Org ID) to a Power Platform Environment ID
+async function resolveOrgIdToEnvironmentId(orgId) {
+    const bapToken = await getBAPToken();
+    
+    // List all environments and find the one whose linkedEnvironmentMetadata.resourceId matches the Org ID
+    const response = await fetch('https://api.bap.microsoft.com/providers/Microsoft.BusinessAppPlatform/scopes/admin/environments?api-version=2021-04-01', {
+        headers: { 'Authorization': `Bearer ${bapToken}` }
+    });
+    
+    if (!response.ok) {
+        console.error('Failed to list environments:', response.status);
+        throw new Error('Failed to list environments. Make sure you have Power Platform admin access.');
+    }
+    
+    const data = await response.json();
+    const environments = data.value || [];
+    console.log('Found', environments.length, 'environments, searching for Org ID:', orgId);
+    
+    for (const env of environments) {
+        const resourceId = env.properties?.linkedEnvironmentMetadata?.resourceId;
+        const instanceUrl = env.properties?.linkedEnvironmentMetadata?.instanceUrl;
+        const envName = env.properties?.displayName || env.name;
+        
+        console.log(`  Environment: ${envName} (${env.name}), resourceId: ${resourceId}`);
+        
+        if (resourceId && resourceId.toLowerCase() === orgId.toLowerCase()) {
+            console.log('  ✓ Match found! Environment ID:', env.name);
+            return env.name; // env.name is the Environment ID (GUID)
+        }
+    }
+    
+    console.error('No environment found matching Org ID:', orgId);
+    return null;
 }
 
 // Get environment name from BAP API (for display purposes)
