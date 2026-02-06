@@ -122,9 +122,60 @@
         /* Loading */
         .admin-loading { text-align: center; padding: 3rem; color: #6b7280; }
         .admin-loading .spinner-border { width: 2.5rem; height: 2.5rem; }
+
+        /* Password gate */
+        .pw-overlay {
+            position: fixed; inset: 0; z-index: 9999;
+            background: #f5f6f8;
+            display: flex; align-items: center; justify-content: center;
+        }
+        .pw-card {
+            background: white; border-radius: 16px; padding: 2.5rem;
+            box-shadow: 0 8px 32px rgba(0,0,0,0.1); max-width: 380px; width: 100%;
+            text-align: center;
+        }
+        .pw-card .pw-icon {
+            width: 56px; height: 56px; border-radius: 14px;
+            background: #e8f4fd; color: #0078d4;
+            display: flex; align-items: center; justify-content: center;
+            font-size: 1.5rem; margin: 0 auto 1.25rem;
+        }
+        .pw-card h2 { font-size: 1.2rem; font-weight: 700; margin-bottom: 0.25rem; }
+        .pw-card p { font-size: 0.85rem; color: #6b7280; margin-bottom: 1.5rem; }
+        .pw-card input[type=password] {
+            width: 100%; padding: 0.6rem 1rem; border: 1.5px solid #d1d5db;
+            border-radius: 8px; font-size: 0.9rem; outline: none; transition: border 0.2s;
+        }
+        .pw-card input[type=password]:focus { border-color: #0078d4; }
+        .pw-card .pw-btn {
+            width: 100%; padding: 0.6rem; margin-top: 1rem;
+            background: #0078d4; color: white; border: none;
+            border-radius: 8px; font-weight: 600; font-size: 0.9rem;
+            cursor: pointer; transition: background 0.2s;
+        }
+        .pw-card .pw-btn:hover { background: #106ebe; }
+        .pw-error { color: #dc3545; font-size: 0.82rem; margin-top: 0.5rem; display: none; }
+        .pw-remember { font-size: 0.82rem; color: #6b7280; margin-top: 0.75rem; }
     </style>
 </head>
 <body>
+    <!-- Password Gate -->
+    <div class="pw-overlay" id="pwOverlay">
+        <div class="pw-card">
+            <div class="pw-icon"><i class="fas fa-lock"></i></div>
+            <h2>Admin Access</h2>
+            <p>Enter the admin password to continue</p>
+            <form onsubmit="return checkAdminPassword(event)">
+                <input type="password" id="adminPw" placeholder="Password" autocomplete="current-password" autofocus>
+                <div class="pw-error" id="pwError">Incorrect password. Try again.</div>
+                <button type="submit" class="pw-btn"><i class="fas fa-sign-in-alt me-1"></i>Unlock</button>
+                <div class="pw-remember">
+                    <label><input type="checkbox" id="pwRemember" checked> Remember for this browser</label>
+                </div>
+            </form>
+        </div>
+    </div>
+
     <!-- Top Navigation -->
     <div class="admin-nav">
         <div class="d-flex align-items-center gap-3">
@@ -347,6 +398,40 @@
         </p>
     </div>
 
+    <script>
+        const ADMIN_PW_HASH = '87a0b2bfe37f3d8610a5208d65472bfb5b5594a4a0e2c1a45bed1e8dce469503';
+        const ADMIN_AUTH_KEY = 'd365_admin_auth';
+
+        async function sha256(str) {
+            const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(str));
+            return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, '0')).join('');
+        }
+
+        async function checkAdminPassword(e) {
+            e.preventDefault();
+            const pw = document.getElementById('adminPw').value;
+            const hash = await sha256(pw);
+            if (hash === ADMIN_PW_HASH) {
+                document.getElementById('pwOverlay').style.display = 'none';
+                if (document.getElementById('pwRemember').checked) {
+                    localStorage.setItem(ADMIN_AUTH_KEY, hash);
+                }
+            } else {
+                document.getElementById('pwError').style.display = 'block';
+                document.getElementById('adminPw').value = '';
+                document.getElementById('adminPw').focus();
+            }
+            return false;
+        }
+
+        // Auto-unlock if previously authenticated
+        (function() {
+            const saved = localStorage.getItem(ADMIN_AUTH_KEY);
+            if (saved === ADMIN_PW_HASH) {
+                document.getElementById('pwOverlay').style.display = 'none';
+            }
+        })();
+    </script>
     <script src="admin.js"></script>
 </body>
 </html>
