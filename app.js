@@ -804,30 +804,31 @@ async function updateAllApps() {
 
 // Update all installed apps
 async function reinstallAllApps() {
-    const installedApps = apps.filter(a => a.instancePackageId);
+    const appsToUpdate = apps.filter(a => a.hasUpdate);
     
-    if (installedApps.length === 0) {
-        alert('No installed apps found.');
+    if (appsToUpdate.length === 0) {
+        alert('No updates available. All apps are up to date.');
         return;
     }
     
-    if (!confirm('Update all ' + installedApps.length + ' installed apps?\n\nThis will apply available updates to all apps.')) {
+    if (!confirm('Update ' + appsToUpdate.length + ' app' + (appsToUpdate.length !== 1 ? 's' : '') + ' with available updates?\n\n' + appsToUpdate.map(a => '• ' + a.name + ' (' + a.version + ' → ' + a.latestVersion + ')').join('\n'))) {
         return;
     }
     
-    showLoading('Updating apps...', '0 of ' + installedApps.length);
+    showLoading('Updating apps...', '0 of ' + appsToUpdate.length);
     
     let successCount = 0;
     let failCount = 0;
     
-    for (let i = 0; i < installedApps.length; i++) {
-        const app = installedApps[i];
-        document.getElementById('loadingDetails').textContent = (i + 1) + ' of ' + installedApps.length + ': ' + app.name;
+    for (let i = 0; i < appsToUpdate.length; i++) {
+        const app = appsToUpdate[i];
+        document.getElementById('loadingDetails').textContent = (i + 1) + ' of ' + appsToUpdate.length + ': ' + app.name;
         
         try {
-            const url = `https://api.powerplatform.com/appmanagement/environments/${environmentId}/applicationPackages/${app.uniqueName}/install?api-version=2022-03-01-preview`;
+            const installUniqueName = app.catalogUniqueName || app.uniqueName;
+            const url = `https://api.powerplatform.com/appmanagement/environments/${environmentId}/applicationPackages/${installUniqueName}/install?api-version=2022-03-01-preview`;
             
-            console.log('Updating:', app.name);
+            console.log('Updating:', app.name, 'using package:', installUniqueName);
             
             const response = await fetch(url, {
                 method: 'POST',
