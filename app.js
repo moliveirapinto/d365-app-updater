@@ -691,28 +691,71 @@ function displayApplications() {
         return;
     }
     
-    const appsWithUpdates = apps.filter(a => a.hasUpdate);
+    const appsWithUpdates = apps.filter(a => a.hasUpdate && !a.updateState);
+    const appsUpdating = apps.filter(a => a.updateState === 'submitted' || a.updateState === 'updating');
+    const appsFailed = apps.filter(a => a.updateState === 'failed');
     const installedApps = apps.filter(a => a.instancePackageId);
     const updateCount = appsWithUpdates.length;
+    const updatingCount = appsUpdating.length;
+    const failedCount = appsFailed.length;
     
     // Update summary text
+    let summaryParts = [installedApps.length + ' apps installed'];
     if (updateCount > 0) {
-        document.getElementById('appCountText').innerHTML = 
-            installedApps.length + ' apps installed &nbsp;|&nbsp; <span style="color: #28a745; font-weight: 600;">' + 
-            updateCount + ' update' + (updateCount !== 1 ? 's' : '') + ' available</span>';
-    } else {
-        document.getElementById('appCountText').textContent = installedApps.length + ' apps installed — all up to date';
+        summaryParts.push('<span style="color: #28a745; font-weight: 600;">' + updateCount + ' update' + (updateCount !== 1 ? 's' : '') + ' available</span>');
     }
+    if (updatingCount > 0) {
+        summaryParts.push('<span style="color: #0d6efd; font-weight: 600;"><span class="spinner-updating"></span>' + updatingCount + ' updating</span>');
+    }
+    if (failedCount > 0) {
+        summaryParts.push('<span style="color: #dc3545; font-weight: 600;">' + failedCount + ' failed</span>');
+    }
+    if (updateCount === 0 && updatingCount === 0 && failedCount === 0) {
+        summaryParts.push('all up to date');
+    }
+    document.getElementById('appCountText').innerHTML = summaryParts.join(' &nbsp;|&nbsp; ');
     
     document.getElementById('updateAllBtn').disabled = updateCount === 0;
     
-    // Show installed apps
-    const installedOrUpdatable = apps.filter(a => a.hasUpdate || a.instancePackageId);
+    // Show installed apps (include updating/failed states)
+    const installedOrUpdatable = apps.filter(a => a.hasUpdate || a.instancePackageId || a.updateState);
     const appsToShow = installedOrUpdatable.length > 0 ? installedOrUpdatable : apps.slice(0, 50);
+    
+    // Sort: failed first, then updating, then updates available, then installed
+    appsToShow.sort((a, b) => {
+        const order = s => s === 'failed' ? 0 : (s === 'submitted' || s === 'updating') ? 1 : 2;
+        const oa = order(a.updateState), ob = order(b.updateState);
+        if (oa !== ob) return oa - ob;
+        if (a.hasUpdate && !b.hasUpdate) return -1;
+        if (!a.hasUpdate && b.hasUpdate) return 1;
+        return a.name.localeCompare(b.name);
+    });
     
     let html = '';
     
-    // Update summary banner
+    // Status banners
+    if (failedCount > 0) {
+        html += '<div class="alert alert-danger mb-3" style="border-left: 4px solid #dc3545;">';
+        html += '<div class="d-flex align-items-center">';
+        html += '<i class="fas fa-exclamation-triangle fa-2x me-3 text-danger"></i>';
+        html += '<div>';
+        html += '<strong>' + failedCount + ' update' + (failedCount !== 1 ? 's' : '') + ' failed</strong><br>';
+        html += '<small>Scroll down to see details. You can retry individual apps or check the Power Platform Admin Center.</small>';
+        html += '</div>';
+        html += '</div>';
+        html += '</div>';
+    }
+    if (updatingCount > 0) {
+        html += '<div class="alert alert-info mb-3" style="border-left: 4px solid #0d6efd;">';
+        html += '<div class="d-flex align-items-center">';
+        html += '<i class="fas fa-sync-alt fa-spin fa-2x me-3 text-primary"></i>';
+        html += '<div>';
+        html += '<strong>' + updatingCount + ' update' + (updatingCount !== 1 ? 's' : '') + ' in progress</strong><br>';
+        html += '<small>Updates are running in the background. Click <strong>"Refresh"</strong> to check current status.</small>';
+        html += '</div>';
+        html += '</div>';
+        html += '</div>';
+    }
     if (updateCount > 0) {
         html += '<div class="alert alert-warning mb-3" style="border-left: 4px solid #ffc107;">';
         html += '<div class="d-flex align-items-center">';
@@ -723,7 +766,8 @@ function displayApplications() {
         html += '</div>';
         html += '</div>';
         html += '</div>';
-    } else {
+    }
+    if (updateCount === 0 && updatingCount === 0 && failedCount === 0) {
         html += '<div class="alert alert-success mb-3">';
         html += '<i class="fas fa-check-circle me-2"></i>';
         html += 'All installed applications are up to date.';
@@ -731,34 +775,68 @@ function displayApplications() {
     }
     
     for (const app of appsToShow) {
-        const stateClass = app.hasUpdate ? 'success' : 'secondary';
-        const stateIcon = app.hasUpdate ? 'arrow-circle-up' : 'check-circle';
-        const stateText = app.hasUpdate ? 'Update Available' : (app.instancePackageId ? 'Installed' : 'Available');
+        let stateClass, stateIcon, stateText, cardClass, cardStyle;
         
-        html += '<div class="app-card' + (app.hasUpdate ? ' border-success' : '') + '" style="' + (app.hasUpdate ? 'border-left: 4px solid #28a745; background: #f8fff8;' : '') + '">';
+        if (app.updateState === 'submitted' || app.updateState === 'updating') {
+            stateClass = 'primary';
+            stateIcon = '';
+            stateText = 'Updating...';
+            cardClass = 'app-card state-updating';
+            cardStyle = '';
+        } else if (app.updateState === 'failed') {
+            stateClass = 'danger';
+            stateIcon = 'exclamation-triangle';
+            stateText = 'Failed';
+            cardClass = 'app-card state-failed';
+            cardStyle = '';
+        } else if (app.hasUpdate) {
+            stateClass = 'success';
+            stateIcon = 'arrow-circle-up';
+            stateText = 'Update Available';
+            cardClass = 'app-card';
+            cardStyle = 'border-left: 4px solid #28a745; background: #f8fff8;';
+        } else {
+            stateClass = 'secondary';
+            stateIcon = 'check-circle';
+            stateText = app.instancePackageId ? 'Installed' : 'Available';
+            cardClass = 'app-card';
+            cardStyle = '';
+        }
+        
+        html += '<div class="' + cardClass + '" style="' + cardStyle + '">';
         html += '<div class="row align-items-center">';
         html += '<div class="col-md-6">';
         html += '<div class="app-name"><i class="fas fa-cube me-2"></i>' + escapeHtml(app.name) + '</div>';
         html += '<div class="app-version mt-2">';
         html += '<i class="fas fa-tag"></i> Version: <strong>' + escapeHtml(app.version) + '</strong>';
-        if (app.hasUpdate && app.latestVersion) {
-            html += ' <i class="fas fa-long-arrow-alt-right text-success mx-1"></i> <strong class="text-success">' + escapeHtml(app.latestVersion) + '</strong>';
+        if ((app.hasUpdate || app.updateState === 'submitted' || app.updateState === 'updating') && app.latestVersion) {
+            html += ' <i class="fas fa-long-arrow-alt-right text-' + (app.updateState ? 'primary' : 'success') + ' mx-1"></i> <strong class="text-' + (app.updateState ? 'primary' : 'success') + '">' + escapeHtml(app.latestVersion) + '</strong>';
         }
         html += '</div>';
         html += '<div class="text-muted small mt-1"><i class="fas fa-building"></i> ' + escapeHtml(app.publisher) + '</div>';
+        if (app.updateState === 'failed' && app.updateError) {
+            html += '<div class="error-detail" title="' + escapeHtml(app.updateError) + '"><i class="fas fa-exclamation-circle me-1"></i>' + escapeHtml(app.updateError) + '</div>';
+        }
         html += '</div>';
         html += '<div class="col-md-3 text-center">';
-        html += '<span class="badge bg-' + stateClass + '"><i class="fas fa-' + stateIcon + '"></i> ' + stateText + '</span>';
+        if (app.updateState === 'submitted' || app.updateState === 'updating') {
+            html += '<span class="badge bg-primary"><span class="spinner-updating"></span> Updating...</span>';
+        } else {
+            html += '<span class="badge bg-' + stateClass + '">';
+            if (stateIcon) html += '<i class="fas fa-' + stateIcon + '"></i> ';
+            html += stateText + '</span>';
+        }
         html += '</div>';
         html += '<div class="col-md-3 text-end">';
-        if (app.hasUpdate) {
-            // Show Update button only when we detect an update is available
+        if (app.updateState === 'submitted' || app.updateState === 'updating') {
+            html += '<span class="text-primary"><i class="fas fa-sync-alt fa-spin"></i> In progress</span>';
+        } else if (app.updateState === 'failed') {
+            html += '<button class="btn btn-outline-danger btn-sm" onclick="updateSingleApp(\'' + escapeHtml(app.uniqueName) + '\')"><i class="fas fa-redo"></i> Retry</button>';
+        } else if (app.hasUpdate) {
             html += '<button class="btn btn-success btn-sm" onclick="updateSingleApp(\'' + escapeHtml(app.uniqueName) + '\')"><i class="fas fa-download"></i> Update</button>';
         } else if (!app.instancePackageId) {
-            // Show Install button for apps not installed
             html += '<button class="btn btn-primary btn-sm" onclick="installApp(\'' + escapeHtml(app.uniqueName) + '\')"><i class="fas fa-plus"></i> Install</button>';
         } else {
-            // Installed and up to date - show checkmark
             html += '<span class="text-success"><i class="fas fa-check-circle"></i> Up to date</span>';
         }
         html += '</div>';
@@ -774,14 +852,19 @@ async function updateSingleApp(uniqueName) {
     const app = apps.find(a => a.uniqueName === uniqueName);
     if (!app) return;
     
-    if (!(await showModal({ title: 'Update App', message: 'Install update for "' + app.name + '"?\n\nCurrent: ' + app.version + '\nNew: ' + app.latestVersion, type: 'update', okText: 'Update', okClass: 'btn-success-modal' }))) {
-        return;
+    // If retrying a failed update, skip confirmation
+    if (app.updateState !== 'failed') {
+        if (!(await showModal({ title: 'Update App', message: 'Install update for "' + app.name + '"?\n\nCurrent: ' + app.version + '\nNew: ' + (app.latestVersion || 'latest'), type: 'update', okText: 'Update', okClass: 'btn-success-modal' }))) {
+            return;
+        }
     }
     
-    showLoading('Installing update...', app.name);
+    // Mark as updating and refresh display immediately
+    app.updateState = 'submitted';
+    app.updateError = null;
+    displayApplications();
     
     try {
-        // Use the catalog's uniqueName if available (for updates), otherwise use the installed app's uniqueName
         const installUniqueName = app.catalogUniqueName || app.uniqueName;
         const url = `https://api.powerplatform.com/appmanagement/environments/${environmentId}/applicationPackages/${installUniqueName}/install?api-version=2022-03-01-preview`;
         
@@ -797,18 +880,20 @@ async function updateSingleApp(uniqueName) {
         
         if (!response.ok) {
             const errorText = await response.text();
-            throw new Error('Install failed: ' + response.status + ' - ' + errorText);
+            throw new Error(response.status + ' - ' + errorText);
         }
         
-        hideLoading();
-        await showAlert('Update Started', 'Update started for ' + app.name + '. The update is running in the background and may take several minutes.', 'success');
-        
-        await loadApplications();
+        // Keep as 'submitted' — user can Refresh to check later
+        app.updateState = 'submitted';
+        app.hasUpdate = false; // Don't count it as a pending update anymore
+        displayApplications();
         
     } catch (error) {
-        hideLoading();
         console.error('Update error:', error);
-        showError('Failed to update: ' + error.message);
+        app.updateState = 'failed';
+        app.updateError = error.message;
+        app.hasUpdate = true; // Keep as updatable so retry is possible
+        displayApplications();
     }
 }
 
@@ -821,7 +906,9 @@ async function installApp(uniqueName) {
         return;
     }
     
-    showLoading('Installing...', app.name);
+    app.updateState = 'submitted';
+    app.updateError = null;
+    displayApplications();
     
     try {
         const url = `https://api.powerplatform.com/appmanagement/environments/${environmentId}/applicationPackages/${app.uniqueName}/install?api-version=2022-03-01-preview`;
@@ -836,18 +923,17 @@ async function installApp(uniqueName) {
         
         if (!response.ok) {
             const errorText = await response.text();
-            throw new Error('Install failed: ' + response.status + ' - ' + errorText);
+            throw new Error(response.status + ' - ' + errorText);
         }
         
-        hideLoading();
-        await showAlert('Installation Started', 'Installation started for ' + app.name + '. This may take several minutes.', 'success');
-        
-        await loadApplications();
+        app.updateState = 'submitted';
+        displayApplications();
         
     } catch (error) {
-        hideLoading();
         console.error('Install error:', error);
-        showError('Failed to install: ' + error.message);
+        app.updateState = 'failed';
+        app.updateError = error.message;
+        displayApplications();
     }
 }
 
@@ -856,11 +942,15 @@ async function reinstallApp(uniqueName) {
     const app = apps.find(a => a.uniqueName === uniqueName);
     if (!app) return;
     
-    if (!(await showModal({ title: 'Update App', message: 'Update "' + app.name + '"?\n\nCurrent version: ' + app.version, type: 'update', okText: 'Update', okClass: 'btn-success-modal' }))) {
-        return;
+    if (app.updateState !== 'failed') {
+        if (!(await showModal({ title: 'Update App', message: 'Update "' + app.name + '"?\n\nCurrent version: ' + app.version, type: 'update', okText: 'Update', okClass: 'btn-success-modal' }))) {
+            return;
+        }
     }
     
-    showLoading('Updating...', app.name);
+    app.updateState = 'submitted';
+    app.updateError = null;
+    displayApplications();
     
     try {
         const url = `https://api.powerplatform.com/appmanagement/environments/${environmentId}/applicationPackages/${app.uniqueName}/install?api-version=2022-03-01-preview`;
@@ -877,24 +967,25 @@ async function reinstallApp(uniqueName) {
         
         if (!response.ok) {
             const errorText = await response.text();
-            throw new Error('Update failed: ' + response.status + ' - ' + errorText);
+            throw new Error(response.status + ' - ' + errorText);
         }
         
-        hideLoading();
-        await showAlert('Update Started', 'Update started for ' + app.name + '. This may take several minutes.', 'success');
-        
-        await loadApplications();
+        app.updateState = 'submitted';
+        app.hasUpdate = false;
+        displayApplications();
         
     } catch (error) {
-        hideLoading();
         console.error('Update error:', error);
-        showError('Failed to update: ' + error.message);
+        app.updateState = 'failed';
+        app.updateError = error.message;
+        app.hasUpdate = true;
+        displayApplications();
     }
 }
 
 // Update all apps
 async function updateAllApps() {
-    const appsToUpdate = apps.filter(a => a.hasUpdate);
+    const appsToUpdate = apps.filter(a => a.hasUpdate && a.updateState !== 'submitted' && a.updateState !== 'updating');
     
     if (appsToUpdate.length === 0) {
         await showAlert('No Updates', 'No updates available.', 'info');
@@ -905,17 +996,23 @@ async function updateAllApps() {
         return;
     }
     
-    showLoading('Installing updates...', '0 of ' + appsToUpdate.length);
-    
     let successCount = 0;
     let failCount = 0;
+    
+    // Mark all as updating immediately
+    for (const app of appsToUpdate) {
+        app.updateState = 'submitted';
+        app.updateError = null;
+    }
+    displayApplications();
+    
+    showLoading('Installing updates...', '0 of ' + appsToUpdate.length);
     
     for (let i = 0; i < appsToUpdate.length; i++) {
         const app = appsToUpdate[i];
         document.getElementById('loadingDetails').textContent = (i + 1) + ' of ' + appsToUpdate.length + ': ' + app.name;
         
         try {
-            // Use the catalog's uniqueName if available (for updates), otherwise use the installed app's uniqueName
             const installUniqueName = app.catalogUniqueName || app.uniqueName;
             const url = `https://api.powerplatform.com/appmanagement/environments/${environmentId}/applicationPackages/${installUniqueName}/install?api-version=2022-03-01-preview`;
             
@@ -931,12 +1028,21 @@ async function updateAllApps() {
             
             if (response.ok) {
                 successCount++;
+                app.updateState = 'submitted';
+                app.hasUpdate = false;
             } else {
                 failCount++;
+                const errorText = await response.text();
+                app.updateState = 'failed';
+                app.updateError = response.status + ' - ' + errorText;
+                app.hasUpdate = true;
                 console.error('Failed to update ' + app.name + ':', response.status);
             }
         } catch (error) {
             failCount++;
+            app.updateState = 'failed';
+            app.updateError = error.message;
+            app.hasUpdate = true;
             console.error('Error updating ' + app.name + ':', error);
         }
         
@@ -945,19 +1051,18 @@ async function updateAllApps() {
     }
     
     hideLoading();
+    displayApplications();
     
     if (failCount === 0) {
-        await showAlert('Updates Started', 'All ' + successCount + ' updates started successfully! Updates are running in the background and may take several minutes.', 'success');
+        await showAlert('Updates Started', 'All ' + successCount + ' updates submitted successfully! Updates are running in the background and may take several minutes. Click "Refresh" to check progress.', 'success');
     } else {
-        await showAlert('Updates Submitted', 'Started ' + successCount + ' updates. ' + failCount + ' failed. Check the Power Platform Admin Center for details.', 'warning');
+        await showAlert('Updates Submitted', successCount + ' update' + (successCount !== 1 ? 's' : '') + ' submitted successfully. ' + failCount + ' failed — see details below. You can retry failed updates individually.', 'warning');
     }
-    
-    await loadApplications();
 }
 
 // Update all installed apps
 async function reinstallAllApps() {
-    const appsToUpdate = apps.filter(a => a.hasUpdate);
+    const appsToUpdate = apps.filter(a => a.hasUpdate && a.updateState !== 'submitted' && a.updateState !== 'updating');
     
     if (appsToUpdate.length === 0) {
         await showAlert('All Up to Date', 'No updates available. All apps are up to date.', 'success');
@@ -968,10 +1073,17 @@ async function reinstallAllApps() {
         return;
     }
     
-    showLoading('Updating apps...', '0 of ' + appsToUpdate.length);
-    
     let successCount = 0;
     let failCount = 0;
+    
+    // Mark all as updating immediately
+    for (const app of appsToUpdate) {
+        app.updateState = 'submitted';
+        app.updateError = null;
+    }
+    displayApplications();
+    
+    showLoading('Updating apps...', '0 of ' + appsToUpdate.length);
     
     for (let i = 0; i < appsToUpdate.length; i++) {
         const app = appsToUpdate[i];
@@ -993,12 +1105,21 @@ async function reinstallAllApps() {
             
             if (response.ok) {
                 successCount++;
+                app.updateState = 'submitted';
+                app.hasUpdate = false;
             } else {
                 failCount++;
+                const errorText = await response.text();
+                app.updateState = 'failed';
+                app.updateError = response.status + ' - ' + errorText;
+                app.hasUpdate = true;
                 console.error('Failed to update ' + app.name + ':', response.status);
             }
         } catch (error) {
             failCount++;
+            app.updateState = 'failed';
+            app.updateError = error.message;
+            app.hasUpdate = true;
             console.error('Error updating ' + app.name + ':', error);
         }
         
@@ -1007,14 +1128,13 @@ async function reinstallAllApps() {
     }
     
     hideLoading();
+    displayApplications();
     
     if (failCount === 0) {
-        await showAlert('Updates Submitted', 'All ' + successCount + ' update requests submitted! Updates are running in the background and may take several minutes.', 'success');
+        await showAlert('Updates Submitted', 'All ' + successCount + ' update requests submitted! Updates are running in the background. Click "Refresh" to check progress.', 'success');
     } else {
-        await showAlert('Updates Submitted', 'Submitted ' + successCount + ' updates. ' + failCount + ' failed. Check the Power Platform Admin Center for details.', 'warning');
+        await showAlert('Updates Submitted', successCount + ' update' + (successCount !== 1 ? 's' : '') + ' submitted. ' + failCount + ' failed — see details below. You can retry failed updates individually.', 'warning');
     }
-    
-    await loadApplications();
 }
 
 // Logout
