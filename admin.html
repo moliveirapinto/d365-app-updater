@@ -72,6 +72,9 @@
             padding: 1.5rem;
         }
         .chart-card h5 { font-size: 0.95rem; font-weight: 600; color: #1a1a1a; margin-bottom: 1rem; }
+        .chart-wrapper { position: relative; width: 100%; }
+        .chart-wrapper.tall { height: 260px; }
+        .chart-wrapper.short { height: 220px; }
 
         /* Table */
         .table-card {
@@ -225,13 +228,13 @@
                 <div class="col-md-8">
                     <div class="chart-card">
                         <h5><i class="fas fa-chart-line me-2 text-primary"></i>Updates Over Time</h5>
-                        <canvas id="chartTimeline" height="260"></canvas>
+                        <div class="chart-wrapper tall"><canvas id="chartTimeline"></canvas></div>
                     </div>
                 </div>
                 <div class="col-md-4">
                     <div class="chart-card">
                         <h5><i class="fas fa-chart-doughnut me-2 text-success"></i>Success vs Failed</h5>
-                        <canvas id="chartSuccessFail" height="260"></canvas>
+                        <div class="chart-wrapper tall"><canvas id="chartSuccessFail"></canvas></div>
                     </div>
                 </div>
             </div>
@@ -239,13 +242,13 @@
                 <div class="col-md-6">
                     <div class="chart-card">
                         <h5><i class="fas fa-building me-2 text-warning"></i>Top Environments</h5>
-                        <canvas id="chartEnvs" height="220"></canvas>
+                        <div class="chart-wrapper short"><canvas id="chartEnvs"></canvas></div>
                     </div>
                 </div>
                 <div class="col-md-6">
                     <div class="chart-card">
                         <h5><i class="fas fa-user me-2 text-info"></i>Top Users</h5>
-                        <canvas id="chartUsers" height="220"></canvas>
+                        <div class="chart-wrapper short"><canvas id="chartUsers"></canvas></div>
                     </div>
                 </div>
             </div>
