@@ -442,16 +442,20 @@ async function loadApplications() {
             let hasUpdate = false;
             let latestVersion = null;
             let catalogUniqueName = null;
+            let spaOnly = false;
             
-            // Check 0: State-based detection — API may directly flag updates
-            const stateLower = (app.state || '').toLowerCase();
-            if (stateLower.includes('update') || stateLower === 'updateavailable' || stateLower === 'installedwithupdateavailable') {
+            // Skip update detection for apps that require Custom Install Experience (SPA)
+            // These cannot be updated via the API — they must be updated through the Admin Center
+            if (app.singlePageApplicationUrl) {
+                spaOnly = true;
+            }
+            if (!spaOnly && (stateLower.includes('update') || stateLower === 'updateavailable' || stateLower === 'installedwithupdateavailable')) {
                 hasUpdate = true;
                 console.log(`  [by state="${app.state}"] ${app.localizedName || app.uniqueName}`);
             }
             
             // Check 1: Direct API fields that might indicate update availability
-            if (app.updateAvailable || app.catalogVersion || app.availableVersion || app.latestVersion || app.newVersion || app.updateVersion) {
+            if (!spaOnly && (app.updateAvailable || app.catalogVersion || app.availableVersion || app.latestVersion || app.newVersion || app.updateVersion)) {
                 const directVersion = app.catalogVersion || app.availableVersion || app.latestVersion || app.newVersion || app.updateVersion;
                 if (directVersion && compareVersions(directVersion, app.version) > 0) {
                     hasUpdate = true;
@@ -466,7 +470,7 @@ async function loadApplications() {
             }
             
             // Check 2: Compare with catalog entry by applicationId
-            if (!hasUpdate && app.applicationId) {
+            if (!spaOnly && !hasUpdate && app.applicationId) {
                 const catalogEntry = catalogMapById.get(app.applicationId);
                 if (catalogEntry && compareVersions(catalogEntry.version, app.version) > 0) {
                     hasUpdate = true;
@@ -477,7 +481,7 @@ async function loadApplications() {
             }
             
             // Check 3: Compare with catalog entry by uniqueName base
-            if (!hasUpdate && app.uniqueName) {
+            if (!spaOnly && !hasUpdate && app.uniqueName) {
                 const baseName = app.uniqueName.replace(/_upgrade$/i, '').replace(/_\d+$/, '');
                 const byName = catalogByName.get(baseName);
                 if (byName && compareVersions(byName.version, app.version) > 0) {
@@ -489,7 +493,7 @@ async function loadApplications() {
             }
             
             // Check 4: Compare with catalog entry by localizedName / applicationName
-            if (!hasUpdate) {
+            if (!spaOnly && !hasUpdate) {
                 const appName = (app.localizedName || app.applicationName || '').toLowerCase();
                 if (appName) {
                     for (const [, catApp] of catalogMapById) {
@@ -506,6 +510,9 @@ async function loadApplications() {
             }
             
             if (hasUpdate) updatesFound++;
+            if (spaOnly) {
+                console.log(`  [skipped SPA] ${app.localizedName || app.uniqueName} — requires Admin Center`);
+            }
             
             return {
                 id: app.id,
@@ -520,7 +527,8 @@ async function loadApplications() {
                 description: app.applicationDescription || '',
                 learnMoreUrl: app.learnMoreUrl || null,
                 instancePackageId: app.instancePackageId,
-                applicationId: app.applicationId
+                applicationId: app.applicationId,
+                spaOnly: spaOnly
             };
         });
         
@@ -962,6 +970,10 @@ async function updateSingleApp(uniqueName) {
         
         if (!response.ok) {
             const errorText = await response.text();
+            // Check if this is a SPA-only app that can't be updated via API
+            if (response.status === 400 && errorText.includes('Custom Install Experience')) {
+                throw new Error('This app requires manual update through the Power Platform Admin Center. It cannot be updated via API.');
+            }
             throw new Error(response.status + ' - ' + errorText);
         }
         
