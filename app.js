@@ -449,6 +449,9 @@ async function loadApplications() {
             if (app.singlePageApplicationUrl) {
                 spaOnly = true;
             }
+            
+            // Check 0: State-based detection — API may directly flag updates
+            const stateLower = (app.state || '').toLowerCase();
             if (!spaOnly && (stateLower.includes('update') || stateLower === 'updateavailable' || stateLower === 'installedwithupdateavailable')) {
                 hasUpdate = true;
                 console.log(`  [by state="${app.state}"] ${app.localizedName || app.uniqueName}`);
