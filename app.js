@@ -4,6 +4,8 @@ let ppToken = null; // Power Platform API token
 let environmentId = null;
 let currentOrgUrl = null;
 let apps = [];
+let allEnvironments = []; // Cached list of all environments
+let selectedApps = new Set(); // Multi-select tracking
 
 // Supabase config for usage tracking
 const SUPABASE_URL = 'https://fpekzltxukikaixebeeu.supabase.co';
@@ -46,6 +48,15 @@ document.addEventListener('DOMContentLoaded', function() {
     document.getElementById('refreshAppsBtn').addEventListener('click', loadApplications);
     document.getElementById('updateAllBtn').addEventListener('click', updateAllApps);
     document.getElementById('reinstallAllBtn').addEventListener('click', reinstallAllApps);
+    document.getElementById('updateSelectedBtn').addEventListener('click', updateSelectedApps);
+    
+    // Close environment dropdown when clicking outside
+    document.addEventListener('click', function(e) {
+        const switcher = document.querySelector('.env-switcher');
+        if (switcher && !switcher.contains(e.target)) {
+            closeEnvDropdown();
+        }
+    });
     
     // Try to auto-login if we have saved credentials and a cached MSAL session
     tryAutoLogin();
@@ -247,6 +258,14 @@ async function resolveOrgUrlToEnvironmentId(orgUrl) {
     const environments = data.value || [];
     console.log('Found', environments.length, 'environments, searching for URL:', orgUrl);
     
+    // Cache all environments for the switcher
+    allEnvironments = environments.filter(env => env.properties?.linkedEnvironmentMetadata?.instanceUrl).map(env => ({
+        id: env.name,
+        name: env.properties?.displayName || env.name,
+        instanceUrl: (env.properties?.linkedEnvironmentMetadata?.instanceUrl || '').replace(/\/+$/, ''),
+        type: env.properties?.environmentType || '',
+    })).sort((a, b) => a.name.localeCompare(b.name));
+    
     for (const env of environments) {
         const instanceUrl = env.properties?.linkedEnvironmentMetadata?.instanceUrl;
         const envName = env.properties?.displayName || env.name;
@@ -257,7 +276,7 @@ async function resolveOrgUrlToEnvironmentId(orgUrl) {
             
             if (normalizedInstance === normalizedInput) {
                 console.log('  ✓ Match found! Environment ID:', env.name);
-                return env.name; // env.name is the Environment ID (GUID)
+                return env.name;
             }
         }
     }
@@ -286,6 +305,111 @@ async function getEnvironmentName() {
         document.getElementById('environmentName').textContent = environmentId;
         console.log('Could not get environment name, using ID');
     }
+    
+    // Render environment switcher
+    renderEnvSwitcher();
+}
+
+// ── Environment Switcher ──────────────────────────────────────
+function renderEnvSwitcher() {
+    const list = document.getElementById('envList');
+    if (!list || allEnvironments.length === 0) return;
+    
+    let html = '';
+    for (const env of allEnvironments) {
+        const isActive = env.id === environmentId;
+        const shortUrl = env.instanceUrl.replace(/^https?:\/\//, '');
+        html += '<div class="env-item' + (isActive ? ' active' : '') + '" onclick="switchEnvironment(\'' + env.id + '\')" title="' + escapeHtml(env.instanceUrl) + '">';
+        html += '<div class="env-item-icon"><i class="fas fa-' + (isActive ? 'check' : 'globe') + '"></i></div>';
+        html += '<div class="env-item-details">';
+        html += '<div class="env-item-name">' + escapeHtml(env.name) + '</div>';
+        html += '<div class="env-item-url">' + escapeHtml(shortUrl) + '</div>';
+        html += '</div>';
+        html += '</div>';
+    }
+    list.innerHTML = html;
+}
+
+function toggleEnvDropdown() {
+    const dropdown = document.getElementById('envDropdown');
+    const btn = document.getElementById('envSwitcherBtn');
+    const isOpen = dropdown.classList.contains('show');
+    if (isOpen) {
+        closeEnvDropdown();
+    } else {
+        dropdown.classList.add('show');
+        btn.classList.add('open');
+        document.getElementById('envSearchInput').value = '';
+        document.getElementById('envSearchInput').focus();
+        filterEnvList();
+    }
+}
+
+function closeEnvDropdown() {
+    const dropdown = document.getElementById('envDropdown');
+    const btn = document.getElementById('envSwitcherBtn');
+    if (dropdown) dropdown.classList.remove('show');
+    if (btn) btn.classList.remove('open');
+}
+
+function filterEnvList() {
+    const search = (document.getElementById('envSearchInput').value || '').toLowerCase();
+    const list = document.getElementById('envList');
+    const filtered = allEnvironments.filter(env => {
+        if (!search) return true;
+        return env.name.toLowerCase().includes(search) || env.instanceUrl.toLowerCase().includes(search);
+    });
+    
+    if (filtered.length === 0) {
+        list.innerHTML = '<div class="env-empty"><i class="fas fa-search me-1"></i> No environments found</div>';
+        return;
+    }
+    
+    let html = '';
+    for (const env of filtered) {
+        const isActive = env.id === environmentId;
+        const shortUrl = env.instanceUrl.replace(/^https?:\/\//, '');
+        html += '<div class="env-item' + (isActive ? ' active' : '') + '" onclick="switchEnvironment(\'' + env.id + '\')" title="' + escapeHtml(env.instanceUrl) + '">';
+        html += '<div class="env-item-icon"><i class="fas fa-' + (isActive ? 'check' : 'globe') + '"></i></div>';
+        html += '<div class="env-item-details">';
+        html += '<div class="env-item-name">' + escapeHtml(env.name) + '</div>';
+        html += '<div class="env-item-url">' + escapeHtml(shortUrl) + '</div>';
+        html += '</div>';
+        html += '</div>';
+    }
+    list.innerHTML = html;
+}
+
+async function switchEnvironment(envId) {
+    if (envId === environmentId) {
+        closeEnvDropdown();
+        return;
+    }
+    
+    closeEnvDropdown();
+    
+    const env = allEnvironments.find(e => e.id === envId);
+    if (!env) return;
+    
+    environmentId = envId;
+    currentOrgUrl = env.instanceUrl;
+    selectedApps.clear();
+    
+    // Update saved credentials with new org URL
+    const savedCreds = localStorage.getItem('d365_app_updater_creds');
+    if (savedCreds) {
+        try {
+            const creds = JSON.parse(savedCreds);
+            creds.orgUrl = env.instanceUrl;
+            localStorage.setItem('d365_app_updater_creds', JSON.stringify(creds));
+        } catch (e) {}
+    }
+    
+    document.getElementById('environmentName').textContent = env.name;
+    renderEnvSwitcher();
+    
+    console.log('Switching to environment:', env.name, '(' + envId + ')');
+    await loadApplications();
 }
 
 // Compare two version strings (e.g., "1.2.3.4" vs "1.2.3.5")
@@ -810,6 +934,9 @@ function displayApplications() {
     
     document.getElementById('updateAllBtn').disabled = updateCount === 0;
     
+    // Update selected button visibility
+    updateSelectedButton();
+    
     // Show installed apps (include updating/failed states)
     const installedOrUpdatable = apps.filter(a => a.hasUpdate || a.instancePackageId || a.updateState);
     const appsToShow = installedOrUpdatable.length > 0 ? installedOrUpdatable : apps.slice(0, 50);
@@ -899,6 +1026,14 @@ function displayApplications() {
         html += '<div class="' + cardClass + '" style="' + cardStyle + '">';
         html += '<div class="row align-items-center">';
         html += '<div class="col-md-6">';
+        // Show checkbox for apps with available updates or failed state
+        const showCheckbox = app.hasUpdate || app.updateState === 'failed';
+        const isChecked = selectedApps.has(app.uniqueName);
+        if (showCheckbox) {
+            html += '<div class="d-flex align-items-start">';
+            html += '<input type="checkbox" class="app-select-cb" ' + (isChecked ? 'checked' : '') + ' onchange="toggleAppSelection(\'' + escapeHtml(app.uniqueName) + '\', this.checked)" title="Select for bulk update">';
+            html += '<div>';
+        }
         html += '<div class="app-name"><i class="fas fa-cube me-2"></i>' + escapeHtml(app.name) + '</div>';
         html += '<div class="app-version mt-2">';
         html += '<i class="fas fa-tag"></i> Version: <strong>' + escapeHtml(app.version) + '</strong>';
@@ -909,6 +1044,9 @@ function displayApplications() {
         html += '<div class="text-muted small mt-1"><i class="fas fa-building"></i> ' + escapeHtml(app.publisher) + '</div>';
         if (app.updateState === 'failed' && app.updateError) {
             html += '<div class="error-detail" title="' + escapeHtml(app.updateError) + '"><i class="fas fa-exclamation-circle me-1"></i>' + escapeHtml(app.updateError) + '</div>';
+        }
+        if (showCheckbox) {
+            html += '</div></div>'; // close checkbox wrapper divs
         }
         html += '</div>';
         html += '<div class="col-md-3 text-center">';
@@ -1239,6 +1377,117 @@ async function reinstallAllApps() {
         await showAlert('Updates Submitted', 'All ' + successCount + ' update requests submitted! Updates are running in the background. Click "Refresh" to check progress.', 'success');
     } else {
         await showAlert('Updates Submitted', successCount + ' update' + (successCount !== 1 ? 's' : '') + ' submitted. ' + failCount + ' failed — see details below. You can retry failed updates individually.', 'warning');
+    }
+}
+
+// Toggle individual app selection for multi-select
+function toggleAppSelection(uniqueName, checked) {
+    if (checked) {
+        selectedApps.add(uniqueName);
+    } else {
+        selectedApps.delete(uniqueName);
+    }
+    updateSelectedButton();
+}
+
+// Show/hide the "Update Selected" button and update count
+function updateSelectedButton() {
+    const btn = document.getElementById('updateSelectedBtn');
+    const countSpan = document.getElementById('selectedCount');
+    if (!btn || !countSpan) return;
+    const count = selectedApps.size;
+    countSpan.textContent = count;
+    if (count > 0) {
+        btn.classList.remove('d-none');
+    } else {
+        btn.classList.add('d-none');
+    }
+}
+
+// Update only the selected apps
+async function updateSelectedApps() {
+    if (selectedApps.size === 0) return;
+
+    const appsToUpdate = apps.filter(a =>
+        selectedApps.has(a.uniqueName) &&
+        (a.hasUpdate || a.updateState === 'failed') &&
+        a.updateState !== 'submitted' &&
+        a.updateState !== 'updating'
+    );
+
+    if (appsToUpdate.length === 0) {
+        await showAlert('Nothing to Update', 'The selected apps have no pending updates.', 'info');
+        return;
+    }
+
+    if (!(await showUpdateConfirm(appsToUpdate))) {
+        return;
+    }
+
+    let successCount = 0;
+    let failCount = 0;
+
+    // Mark all as updating immediately
+    for (const app of appsToUpdate) {
+        app.updateState = 'submitted';
+        app.updateError = null;
+    }
+    displayApplications();
+
+    showLoading('Updating selected apps...', '0 of ' + appsToUpdate.length);
+
+    for (let i = 0; i < appsToUpdate.length; i++) {
+        const app = appsToUpdate[i];
+        document.getElementById('loadingDetails').textContent = (i + 1) + ' of ' + appsToUpdate.length + ': ' + app.name;
+
+        try {
+            const installUniqueName = app.catalogUniqueName || app.uniqueName;
+            const url = `https://api.powerplatform.com/appmanagement/environments/${environmentId}/applicationPackages/${installUniqueName}/install?api-version=2022-03-01-preview`;
+
+            console.log('Updating:', app.name, 'using package:', installUniqueName);
+
+            const response = await fetch(url, {
+                method: 'POST',
+                headers: {
+                    'Authorization': `Bearer ${ppToken}`,
+                    'Content-Type': 'application/json'
+                }
+            });
+
+            if (response.ok) {
+                successCount++;
+                app.updateState = 'submitted';
+                app.hasUpdate = false;
+            } else {
+                failCount++;
+                const errorText = await response.text();
+                app.updateState = 'failed';
+                app.updateError = response.status + ' - ' + errorText;
+                app.hasUpdate = true;
+                console.error('Failed to update ' + app.name + ':', response.status);
+            }
+        } catch (error) {
+            failCount++;
+            app.updateState = 'failed';
+            app.updateError = error.message;
+            app.hasUpdate = true;
+            console.error('Error updating ' + app.name + ':', error);
+        }
+
+        await new Promise(r => setTimeout(r, 1500));
+    }
+
+    hideLoading();
+    selectedApps.clear();
+    displayApplications();
+
+    // Log usage to Supabase
+    logUsage(successCount, failCount, appsToUpdate.map(a => a.name));
+
+    if (failCount === 0) {
+        await showAlert('Updates Submitted', 'All ' + successCount + ' selected update(s) submitted! Updates are running in the background. Click "Refresh" to check progress.', 'success');
+    } else {
+        await showAlert('Updates Submitted', successCount + ' submitted, ' + failCount + ' failed — see details below.', 'warning');
     }
 }
 
