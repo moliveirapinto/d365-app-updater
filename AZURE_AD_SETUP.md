@@ -40,14 +40,32 @@ After the app is created:
 
 ## Step 4: Add API Permissions
 
+⚠️ **CRITICAL**: You must add TWO API permissions for the app to work.
+
+### Add Power Platform API Permission
+
 1. In the left menu, click **API permissions**
 2. Click **+ Add a permission**
-3. Select **Dynamics CRM** (scroll down or search for it)
+3. Click **APIs my organization uses**
+4. Search for: **"Power Platform API"** or paste `https://api.powerplatform.com`
+5. Select **Delegated permissions**
+6. Check the box for **user_impersonation**
+7. Click **Add permissions**
+
+### Add BAP API Permission
+
+1. Click **+ Add a permission** again
+2. Click **APIs my organization uses**
+3. Search for: **"BAP"** or paste `https://api.bap.microsoft.com`
 4. Select **Delegated permissions**
 5. Check the box for **user_impersonation**
 6. Click **Add permissions**
-7. **Important**: Click **Grant admin consent for [Your Org]** (requires admin privileges)
+
+### Grant Consent
+
+1. **Important**: Click **Grant admin consent for [Your Org]** at the top (requires admin privileges)
    - If you don't see this button, contact your Azure AD administrator
+2. You should now see both APIs with green checkmarks
 
 ## Step 5: Get Your Credentials
 
@@ -99,13 +117,27 @@ After the app is created:
 2. Click "Grant admin consent for [Your Org]"
 3. If you can't do this, contact your Azure AD administrator
 
+### Issue: "AADSTS650057: Invalid resource"
+
+**Error message**: "The client has requested access to a resource which is not listed in the requested permissions"
+
+**Problem**: You're missing the Power Platform API and/or BAP API permissions
+
+**Solution**:
+1. Go to **API permissions**
+2. Verify you have BOTH:
+   - ✅ Power Platform API (`https://api.powerplatform.com`)
+   - ✅ BAP API (`https://api.bap.microsoft.com`)
+3. If either is missing, click **+ Add a permission** → **APIs my organization uses** → search for the API → add **user_impersonation** permission
+4. Click **Grant admin consent**
+
 ### Issue: "Access token validation failure"
 
 **Problem**: Wrong tenant ID or missing permissions
 
 **Solution**:
 1. Verify you're using the correct Tenant ID
-2. Ensure Dynamics CRM permission is added and consented
+2. Ensure Power Platform API and BAP API permissions are added and consented
 3. Make sure you're signing in with an account that has access to the D365 environment
 
 ## Security Best Practices
@@ -139,8 +171,9 @@ Before deploying to users:
 - [ ] Single-page application platform configured
 - [ ] Correct redirect URI(s) added
 - [ ] Access tokens and ID tokens enabled
-- [ ] Dynamics CRM API permission added
-- [ ] Admin consent granted
+- [ ] Power Platform API permission added (`https://api.powerplatform.com`)
+- [ ] BAP API permission added (`https://api.bap.microsoft.com`)
+- [ ] Admin consent granted for both APIs
 - [ ] Test login successful
 - [ ] Can access D365 environment data
 - [ ] Apps list loads correctly
