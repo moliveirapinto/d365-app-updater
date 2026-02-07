@@ -1010,11 +1010,11 @@ function displayApplications() {
             cardClass = 'app-card state-failed';
             cardStyle = '';
         } else if (app.hasUpdate) {
-            stateClass = 'success';
+            stateClass = 'warning';
             stateIcon = 'arrow-circle-up';
             stateText = 'Update Available';
             cardClass = 'app-card';
-            cardStyle = 'border-left: 4px solid #28a745; background: #f8fff8;';
+            cardStyle = 'border-left: 4px solid #e67e22; background: #fef9f3;';
         } else {
             stateClass = 'secondary';
             stateIcon = 'check-circle';
