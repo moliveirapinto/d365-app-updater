@@ -610,18 +610,21 @@
         <div id="appsSection" class="hidden">
             <div class="main-card">
                 <div class="d-flex justify-content-between align-items-center mb-4">
-                    <div class="env-switcher">
-                        <button class="env-switcher-btn" id="envSwitcherBtn" onclick="toggleEnvDropdown()">
-                            <i class="fas fa-globe" style="color:#0078d4;"></i>
-                            <span class="env-name" id="environmentName">Loading...</span>
-                            <i class="fas fa-chevron-down"></i>
-                        </button>
-                        <div class="env-dropdown" id="envDropdown">
-                            <div class="env-search">
-                                <i class="fas fa-search"></i>
-                                <input type="text" id="envSearchInput" placeholder="Search environments..." oninput="filterEnvList()">
+                    <div class="d-flex align-items-center gap-2">
+                        <span style="font-size:0.82rem; color:#6b7280;">Environment:</span>
+                        <div class="env-switcher">
+                            <button class="env-switcher-btn" id="envSwitcherBtn" onclick="toggleEnvDropdown()">
+                                <i class="fas fa-globe" style="color:#0078d4;"></i>
+                                <span class="env-name" id="environmentName">Loading...</span>
+                                <i class="fas fa-chevron-down"></i>
+                            </button>
+                            <div class="env-dropdown" id="envDropdown">
+                                <div class="env-search">
+                                    <i class="fas fa-search"></i>
+                                    <input type="text" id="envSearchInput" placeholder="Search environments..." oninput="filterEnvList()">
+                                </div>
+                                <div class="env-list" id="envList"></div>
                             </div>
-                            <div class="env-list" id="envList"></div>
                         </div>
                     </div>
                     <div class="d-flex align-items-center gap-2">
