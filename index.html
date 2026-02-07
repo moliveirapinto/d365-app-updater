@@ -16,6 +16,17 @@
             min-height: 100vh;
             padding: 0;
         }
+        .top-credit {
+            background: linear-gradient(90deg, #0078d4 0%, #005a9e 100%);
+            color: rgba(255,255,255,0.85);
+            text-align: center;
+            padding: 0.35rem 1rem;
+            font-size: 0.72rem;
+            letter-spacing: 0.02em;
+        }
+        .top-credit strong { color: #fff; font-weight: 600; }
+        .top-credit a { color: rgba(255,255,255,0.9); text-decoration: none; }
+        .top-credit a:hover { color: #fff; text-decoration: underline; }
         .auth-page {
             min-height: 100vh;
             display: flex;
@@ -499,6 +510,9 @@
     </style>
 </head>
 <body>
+    <div class="top-credit">
+        <span>Built by <strong>Mauricio Oliveira</strong> — Contact Center GBB &nbsp;|&nbsp; <a href="mailto:mauricio.oliveira@microsoft.com">mauricio.oliveira@microsoft.com</a></span>
+    </div>
     <div class="container">
         <!-- Authentication Section -->
         <div id="authSection">
