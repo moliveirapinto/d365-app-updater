@@ -100,6 +100,7 @@ async function tryAutoLogin() {
         const msalConfig = createMsalConfig(tenantId, clientId);
         msalInstance = new msal.PublicClientApplication(msalConfig);
         await msalInstance.initialize();
+        await msalInstance.handleRedirectPromise(); // Clear any stale redirect state
 
         const accounts = msalInstance.getAllAccounts();
         if (accounts.length === 0) {
@@ -114,6 +115,10 @@ async function tryAutoLogin() {
         const ppRequest = { scopes: ['https://api.powerplatform.com/.default'], account: accounts[0] };
         const ppResult = await msalInstance.acquireTokenSilent(ppRequest);
         ppToken = ppResult.accessToken;
+
+        // Try to silently acquire BAP token (no interactive fallback during auto-login)
+        const bapRequest = { scopes: ['https://api.bap.microsoft.com/.default'], account: accounts[0] };
+        await msalInstance.acquireTokenSilent(bapRequest);
 
         showLoading('Reconnecting...', 'Resolving environment');
 
@@ -188,6 +193,7 @@ async function handleAuthentication(event) {
         const msalConfig = createMsalConfig(tenantId, clientId);
         msalInstance = new msal.PublicClientApplication(msalConfig);
         await msalInstance.initialize();
+        await msalInstance.handleRedirectPromise(); // Clear any stale redirect state
         
         // Sign in with a single popup, consenting to both APIs at once
         showLoading('Authenticating...', 'Signing in to Microsoft');
@@ -471,14 +477,8 @@ async function fetchAllPages(url, token) {
 async function getBAPToken() {
     const accounts = msalInstance.getAllAccounts();
     const bapRequest = { scopes: ['https://api.bap.microsoft.com/.default'], account: accounts[0] };
-    try {
-        const result = await msalInstance.acquireTokenSilent(bapRequest);
-        return result.accessToken;
-    } catch (e) {
-        // Consent may be missing — use redirect to avoid popup-blocked issues
-        await msalInstance.acquireTokenRedirect(bapRequest);
-        // Page will redirect, so this won't return
-    }
+    const result = await msalInstance.acquireTokenSilent(bapRequest);
+    return result.accessToken;
 }
 
 // Load applications from Power Platform API
