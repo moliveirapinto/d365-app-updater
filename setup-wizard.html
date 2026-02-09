@@ -484,11 +484,14 @@
                     return;
                 }
                 
+                // Azure CLI's well-known client ID - must match what we used to initiate sign-in
+                const AZURE_CLI_CLIENT_ID = '04b07795-8ddb-461a-bbee-02f9e1bf7b46';
+                
                 try {
-                    // Initialize MSAL with the saved client ID
+                    // Initialize MSAL with Azure CLI client ID (same as what we used to sign in)
                     const wizardMsalConfig = {
                         auth: {
-                            clientId: savedClientId,
+                            clientId: AZURE_CLI_CLIENT_ID,
                             authority: 'https://login.microsoftonline.com/organizations',
                             redirectUri: window.location.origin + window.location.pathname // setup-wizard.html
                         },
@@ -497,7 +500,7 @@
                     
                     const wizardMsal = new msal.PublicClientApplication(wizardMsalConfig);
                     await wizardMsal.initialize();
-                    wizardLog('MSAL initialized for redirect handling');
+                    wizardLog('MSAL initialized for redirect handling (Azure CLI client)');
                     
                     const response = await wizardMsal.handleRedirectPromise();
                     wizardLog('handleRedirectPromise result', response ? { 
@@ -511,7 +514,7 @@
                     
                     if (response && response.accessToken) {
                         wizardLog('Token acquired successfully!');
-                        userProvidedClientId = savedClientId;
+                        userProvidedClientId = savedClientId; // The app we want to configure
                         adminAccessToken = response.accessToken;
                         document.getElementById('userClientId').value = savedClientId;
                         sessionStorage.removeItem('wizard_clientId');
@@ -637,6 +640,10 @@
             initializeMSAL();
         }
 
+        // Azure CLI's well-known client ID - works in ALL tenants without pre-configuration
+        // This allows us to sign in and get Graph API access without requiring the user's app to be pre-configured
+        const AZURE_CLI_CLIENT_ID = '04b07795-8ddb-461a-bbee-02f9e1bf7b46';
+
         function initializeMSAL() {
             // Clear ALL stale MSAL state from sessionStorage before starting fresh
             // This prevents "interaction_in_progress" errors from previous failed attempts
@@ -649,11 +656,11 @@
             }
             keysToRemove.forEach(k => sessionStorage.removeItem(k));
 
-            // Use THIS PAGE (setup-wizard.html) as the redirect URI
-            // This avoids cross-page issues with sessionStorage
+            // Use Azure CLI client ID for sign-in - this is a Microsoft first-party app
+            // that's available in all tenants. We'll configure the user's app via Graph API.
             const msalConfig = {
                 auth: {
-                    clientId: userProvidedClientId,
+                    clientId: AZURE_CLI_CLIENT_ID,
                     authority: 'https://login.microsoftonline.com/organizations',
                     redirectUri: window.location.origin + window.location.pathname // setup-wizard.html
                 },
@@ -663,8 +670,8 @@
                 }
             };
             
-            wizardLog('Initializing MSAL', { 
-                clientId: userProvidedClientId.substring(0, 8) + '...', 
+            wizardLog('Initializing MSAL with Azure CLI client', { 
+                userAppClientId: userProvidedClientId.substring(0, 8) + '...', 
                 redirectUri: msalConfig.auth.redirectUri 
             });
 
@@ -735,8 +742,53 @@
                 }
                 
                 const appObjectId = apps.value[0].id;
+                const currentApp = apps.value[0];
                 wizardLog('Found app with Object ID: ' + appObjectId);
-                let currentPermissions = apps.value[0].requiredResourceAccess || [];
+                
+                // Configure redirect URIs for Single Page Application (SPA)
+                wizardLog('Configuring redirect URIs...');
+                const appBaseUrl = window.location.origin + '/d365-app-updater/';
+                const requiredRedirectUris = [
+                    appBaseUrl,
+                    appBaseUrl + 'index.html',
+                    appBaseUrl + 'setup-wizard.html'
+                ];
+                
+                // Get existing SPA redirect URIs
+                let spaRedirectUris = currentApp.spa?.redirectUris || [];
+                let urisAdded = false;
+                
+                for (const uri of requiredRedirectUris) {
+                    if (!spaRedirectUris.includes(uri)) {
+                        spaRedirectUris.push(uri);
+                        urisAdded = true;
+                        wizardLog('Adding redirect URI: ' + uri);
+                    }
+                }
+                
+                if (urisAdded) {
+                    const uriUpdateResponse = await fetch(`https://graph.microsoft.com/v1.0/applications/${appObjectId}`, {
+                        method: 'PATCH',
+                        headers: {
+                            'Authorization': `Bearer ${adminAccessToken}`,
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify({
+                            spa: { redirectUris: spaRedirectUris }
+                        })
+                    });
+                    
+                    if (uriUpdateResponse.ok) {
+                        wizardLog('Redirect URIs configured successfully!');
+                    } else {
+                        const errText = await uriUpdateResponse.text();
+                        wizardLog('Failed to add redirect URIs: ' + errText);
+                    }
+                } else {
+                    wizardLog('Redirect URIs already configured');
+                }
+                
+                let currentPermissions = currentApp.requiredResourceAccess || [];
 
                 // Add each permission (dynamically look up scope IDs)
                 let progressNum = 1;
