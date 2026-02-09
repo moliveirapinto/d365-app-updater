@@ -143,35 +143,78 @@ async function handleRedirectResponse() {
         if (accounts.length === 0) {
             // No cached session, user must log in manually
             msalInstance = null;
+            // Clear any pending auth state
+            sessionStorage.removeItem('d365_auth_step');
             return;
         }
 
         const account = accounts[0];
 
+        // Track which step of auth we're on to avoid redirect loops
+        const authStep = sessionStorage.getItem('d365_auth_step') || 'initial';
+        console.log('Auth step:', authStep, 'Redirect result:', redirectResult ? 'present' : 'none');
+
+        // If returning from a runtime BAP token redirect, clear step and continue
+        if (authStep === 'acquiring_bap_runtime' && redirectResult) {
+            console.log('Returned from runtime BAP token redirect');
+            sessionStorage.removeItem('d365_auth_step');
+        }
+
         // If we came back from a redirect, or we have a cached session, continue auth flow
         showLoading('Authenticating...', 'Restoring your session');
 
-        // Try to silently acquire Power Platform token
+        // Try to acquire Power Platform token
         const ppRequest = { scopes: ['https://api.powerplatform.com/.default'], account };
         let ppResult;
-        try {
-            ppResult = await msalInstance.acquireTokenSilent(ppRequest);
-        } catch (e) {
-            // Need consent — redirect for it
-            msalInstance.acquireTokenRedirect(ppRequest);
-            return; // Page will reload
+        
+        // If we just came back from PP token redirect, the token should be in redirectResult or cache
+        if (authStep === 'acquiring_pp' && redirectResult && redirectResult.accessToken) {
+            ppResult = redirectResult;
+            console.log('Using PP token from redirect result');
+        } else {
+            try {
+                ppResult = await msalInstance.acquireTokenSilent(ppRequest);
+            } catch (e) {
+                // Only redirect if we haven't already tried this step
+                if (authStep !== 'acquiring_pp') {
+                    console.log('Need consent for Power Platform API, redirecting...');
+                    sessionStorage.setItem('d365_auth_step', 'acquiring_pp');
+                    await msalInstance.acquireTokenRedirect(ppRequest);
+                    return; // Page will reload
+                } else {
+                    // We already tried redirecting for this scope and it still fails
+                    throw new Error('Failed to acquire Power Platform token after consent. Please check your app registration permissions.');
+                }
+            }
         }
         ppToken = ppResult.accessToken;
 
-        // Try to silently acquire BAP token
+        // Try to acquire BAP token
         const bapRequest = { scopes: ['https://api.bap.microsoft.com/.default'], account };
-        try {
-            await msalInstance.acquireTokenSilent(bapRequest);
-        } catch (e) {
-            // Need consent — redirect for it
-            msalInstance.acquireTokenRedirect(bapRequest);
-            return; // Page will reload
+        
+        // If we just came back from BAP token redirect, use that result
+        if (authStep === 'acquiring_bap' && redirectResult && redirectResult.accessToken) {
+            console.log('Using BAP token from redirect result');
+            // Token is now in cache, we can proceed
+        } else {
+            try {
+                await msalInstance.acquireTokenSilent(bapRequest);
+            } catch (e) {
+                // Only redirect if we haven't already tried this step
+                if (authStep !== 'acquiring_bap') {
+                    console.log('Need consent for BAP API, redirecting...');
+                    sessionStorage.setItem('d365_auth_step', 'acquiring_bap');
+                    await msalInstance.acquireTokenRedirect(bapRequest);
+                    return; // Page will reload
+                } else {
+                    // We already tried redirecting for this scope and it still fails
+                    throw new Error('Failed to acquire BAP token after consent. Please check your app registration permissions.');
+                }
+            }
         }
+
+        // Clear auth step - we're done with redirects
+        sessionStorage.removeItem('d365_auth_step');
 
         showLoading('Authenticating...', 'Resolving environment');
 
@@ -184,7 +227,7 @@ async function handleRedirectResponse() {
 
         environmentId = await resolveOrgUrlToEnvironmentId(normalizedOrgUrl);
         if (!environmentId) {
-            throw new Error('Could not resolve environment');
+            throw new Error('Could not resolve environment. Please verify the Organization URL and your permissions.');
         }
 
         currentOrgUrl = normalizedOrgUrl;
@@ -201,9 +244,11 @@ async function handleRedirectResponse() {
 
         console.log('Auth successful for', account.username);
     } catch (e) {
-        // Silent acquisition failed — token expired or revoked, user must log in again
-        console.log('Auto-login failed, user will log in manually:', e.message);
+        // Clear auth step on error to prevent loops
+        sessionStorage.removeItem('d365_auth_step');
+        console.error('Auto-login failed:', e.message);
         hideLoading();
+        showError('Authentication failed: ' + e.message);
         msalInstance = null;
         ppToken = null;
         environmentId = null;
@@ -240,6 +285,9 @@ async function handleAuthentication(event) {
         localStorage.setItem('d365_app_updater_creds', JSON.stringify({ orgUrl: orgUrlValue, tenantId, clientId }));
     }
     
+    // Clear any previous auth step state to start fresh
+    sessionStorage.removeItem('d365_auth_step');
+    
     try {
         showLoading('Authenticating...', 'Connecting to Microsoft');
         
@@ -251,7 +299,7 @@ async function handleAuthentication(event) {
         showLoading('Authenticating...', 'Redirecting to Microsoft sign-in...');
         
         // Save the pending auth state so we know to continue after redirect
-        localStorage.setItem('d365_app_updater_pending_auth', 'true');
+        sessionStorage.setItem('d365_auth_step', 'initial');
         
         await msalInstance.loginRedirect({
             scopes: ['openid', 'profile']
@@ -501,8 +549,13 @@ async function getBAPToken() {
         const result = await msalInstance.acquireTokenSilent(bapRequest);
         return result.accessToken;
     } catch (e) {
-        // Silent failed — redirect for consent
-        msalInstance.acquireTokenRedirect(bapRequest);
+        // Silent failed — redirect for consent, but track step to avoid loops
+        const currentStep = sessionStorage.getItem('d365_auth_step');
+        if (currentStep === 'acquiring_bap_runtime') {
+            throw new Error('Failed to acquire BAP token. Please check your app registration permissions.');
+        }
+        sessionStorage.setItem('d365_auth_step', 'acquiring_bap_runtime');
+        await msalInstance.acquireTokenRedirect(bapRequest);
         // Page will reload, throw to stop current execution
         throw new Error('Redirecting for BAP API consent...');
     }
