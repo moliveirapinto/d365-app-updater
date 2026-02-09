@@ -28,9 +28,10 @@ After the app is created:
 1. In the left menu, click **Authentication**
 2. Click **+ Add a platform**
 3. Select **Single-page application**
-4. Add your Redirect URI:
-   - For local testing: `http://localhost:8000`
-   - For production: Your deployed app URL (e.g., `https://yourapp.azurestaticapps.net`)
+4. Add your Redirect URI (use the root URL without any page name):
+   - For local testing: `http://localhost:8000/`
+   - For production: Your deployed app URL with trailing slash (e.g., `https://yourapp.azurestaticapps.net/`)
+   - ⚠️ **Important**: The redirect URI must end with a `/` and should be the root of your application
    - You can add multiple URIs for different environments
 5. Under **Implicit grant and hybrid flows**, check:
    - ✅ **Access tokens** (used for implicit flows)

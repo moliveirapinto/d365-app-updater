@@ -17,7 +17,7 @@ function createMsalConfig(tenantId, clientId) {
         auth: {
             clientId: clientId,
             authority: `https://login.microsoftonline.com/${tenantId}`,
-            redirectUri: window.location.origin + window.location.pathname.replace(/\/[^\/]*\.[^\/]*$/, '/'),
+            redirectUri: window.location.origin + '/',
         },
         cache: {
             cacheLocation: 'localStorage',
@@ -100,7 +100,6 @@ async function tryAutoLogin() {
         const msalConfig = createMsalConfig(tenantId, clientId);
         msalInstance = new msal.PublicClientApplication(msalConfig);
         await msalInstance.initialize();
-        await msalInstance.handleRedirectPromise(); // Clear any stale redirect state
 
         const accounts = msalInstance.getAllAccounts();
         if (accounts.length === 0) {
@@ -193,7 +192,6 @@ async function handleAuthentication(event) {
         const msalConfig = createMsalConfig(tenantId, clientId);
         msalInstance = new msal.PublicClientApplication(msalConfig);
         await msalInstance.initialize();
-        await msalInstance.handleRedirectPromise(); // Clear any stale redirect state
         
         // Sign in (basic OpenID scopes only)
         showLoading('Authenticating...', 'Signing in to Microsoft');
