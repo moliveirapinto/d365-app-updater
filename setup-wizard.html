@@ -105,11 +105,7 @@
         }
         .step.active .step-circle { background: #0078d4; color: white; }
         .step.complete .step-circle { background: #10b981; color: white; }
-        .step.complete .step-circle::after {
-            content: '\f00c';
-            font-family: 'Font Awesome 6 Free';
-            font-weight: 900;
-        }
+        .step.complete .step-circle::after { display: none; }
         .step-label { font-size: 0.72rem; color: #6b7280; font-weight: 500; }
         .step.active .step-label { color: #0078d4; font-weight: 600; }
         .step.complete .step-label { color: #10b981; }
@@ -389,7 +385,7 @@
                     <p class="text-muted mb-3">Your app registration is fully configured with all required permissions.</p>
                     
                     <div class="alert alert-success text-start">
-                        <strong><i class="fas fa-check-circle me-2"></i>All Permissions Added:</strong>
+                        <strong>All Permissions Added:</strong>
                         <ul class="mt-2 mb-0">
                             <li>✅ Power Platform API</li>
                             <li>✅ Dynamics CRM</li>
@@ -402,9 +398,7 @@
                     <div class="alert alert-info text-start mt-3">
                         <strong><i class="fas fa-key me-2"></i>Your Client ID:</strong>
                         <div class="code-box mt-2" id="clientIdDisplay">Loading...</div>
-                        <button class="btn btn-sm btn-outline-primary" onclick="copyClientId()">
-                            <i class="fas fa-copy me-1"></i>Copy to Clipboard
-                        </button>
+                        <button class="btn btn-sm btn-link text-muted p-0" style="font-size:0.78rem;" onclick="copyClientId()">Copy</button>
                     </div>
 
                     <h5 class="mt-4 mb-3">Next Steps:</h5>
@@ -416,12 +410,7 @@
                     </ol>
 
                     <div class="d-grid gap-2 mt-4">
-                        <a href="index.html" class="btn btn-primary btn-lg">
-                            <i class="fas fa-arrow-right me-2"></i>Open D365 App Updater
-                        </a>
-                        <button class="btn btn-secondary" onclick="resetWizard()">
-                            <i class="fas fa-redo me-2"></i>Configure Another App
-                        </button>
+                        <a href="index.html" class="btn btn-primary btn-lg">Open D365 App Updater</a>
                     </div>
                 </div>
             </div>
