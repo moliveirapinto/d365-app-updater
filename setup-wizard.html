@@ -439,62 +439,29 @@
             const savedClientId = sessionStorage.getItem('wizard_clientId');
             if (!savedClientId) return; // No pending wizard flow
 
-            userProvidedClientId = savedClientId;
-            document.getElementById('userClientId').value = savedClientId;
-
-            // Reconstruct MSAL — use the ROOT directory as redirect URI (must match what was used in loginRedirect)
-            const pathDir = window.location.pathname.substring(0, window.location.pathname.lastIndexOf('/') + 1);
-            const msalConfig = {
-                auth: {
-                    clientId: userProvidedClientId,
-                    authority: 'https://login.microsoftonline.com/organizations',
-                    redirectUri: window.location.origin + pathDir
-                },
-                cache: {
-                    cacheLocation: 'sessionStorage',
-                    storeAuthStateInCookie: false
-                }
-            };
-
-            msalInstance = new msal.PublicClientApplication(msalConfig);
-            await msalInstance.initialize();
-
-            try {
-                const response = await msalInstance.handleRedirectPromise();
-                if (response && response.accessToken) {
-                    // We got the token back from the redirect
-                    adminAccessToken = response.accessToken;
-                    sessionStorage.removeItem('wizard_clientId'); // Clean up
-                    moveToStep(3);
-                    await addPermissions();
-                } else {
-                    // Redirect happened but no token — try silent
-                    const accounts = msalInstance.getAllAccounts();
-                    if (accounts.length > 0) {
-                        try {
-                            const silentResult = await msalInstance.acquireTokenSilent({
-                                scopes: ['https://graph.microsoft.com/Application.ReadWrite.All', 'https://graph.microsoft.com/DelegatedPermissionGrant.ReadWrite.All'],
-                                account: accounts[0]
-                            });
-                            adminAccessToken = silentResult.accessToken;
-                            sessionStorage.removeItem('wizard_clientId');
-                            moveToStep(3);
-                            await addPermissions();
-                        } catch (e) {
-                            // Silent failed, user needs to start over
-                            sessionStorage.removeItem('wizard_clientId');
-                            console.warn('Silent token acquisition failed after redirect:', e);
-                        }
-                    } else {
-                        sessionStorage.removeItem('wizard_clientId');
-                    }
-                }
-            } catch (err) {
+            // Check for error from redirect processing
+            const wizardError = sessionStorage.getItem('wizard_error');
+            if (wizardError) {
+                sessionStorage.removeItem('wizard_error');
                 sessionStorage.removeItem('wizard_clientId');
-                console.error('Redirect handling error:', err);
-                showError(2, 'Sign-in failed: ' + err.message);
+                showError(2, 'Sign-in failed: ' + wizardError);
                 moveToStep(2);
+                return;
             }
+
+            // Check for access token (set by app.js after processing redirect)
+            const accessToken = sessionStorage.getItem('wizard_accessToken');
+            if (!accessToken) return; // No token yet, user hasn't completed sign-in
+
+            // We have the token! Clean up and proceed
+            userProvidedClientId = savedClientId;
+            adminAccessToken = accessToken;
+            document.getElementById('userClientId').value = savedClientId;
+            sessionStorage.removeItem('wizard_accessToken');
+            sessionStorage.removeItem('wizard_clientId');
+
+            moveToStep(3);
+            await addPermissions();
         });
 
         function copyRedirectUri() {

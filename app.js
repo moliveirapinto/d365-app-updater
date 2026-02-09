@@ -32,14 +32,36 @@ function createMsalConfig(tenantId, clientId) {
 let _pendingRedirectAuth = false;
 
 // Initialize on page load
-document.addEventListener('DOMContentLoaded', function() {
+document.addEventListener('DOMContentLoaded', async function() {
     console.log('DOM Content Loaded');
 
-    // If returning from wizard auth redirect, forward to setup-wizard.html preserving the hash
-    if (sessionStorage.getItem('wizard_clientId')) {
-        const hash = window.location.hash;
-        window.location.replace('setup-wizard.html' + hash);
-        return; // Stop — don't initialize the main app
+    // If returning from wizard auth redirect, handle MSAL here on the root page
+    // (MSAL requires redirect response to be processed on the same URL that was used as redirectUri)
+    const wizardClientId = sessionStorage.getItem('wizard_clientId');
+    if (wizardClientId && window.location.hash) {
+        try {
+            const pathDir = window.location.pathname.substring(0, window.location.pathname.lastIndexOf('/') + 1);
+            const wizardMsalConfig = {
+                auth: {
+                    clientId: wizardClientId,
+                    authority: 'https://login.microsoftonline.com/organizations',
+                    redirectUri: window.location.origin + pathDir
+                },
+                cache: { cacheLocation: 'sessionStorage', storeAuthStateInCookie: false }
+            };
+            const wizardMsal = new msal.PublicClientApplication(wizardMsalConfig);
+            await wizardMsal.initialize();
+            const response = await wizardMsal.handleRedirectPromise();
+            if (response && response.accessToken) {
+                sessionStorage.setItem('wizard_accessToken', response.accessToken);
+            }
+        } catch (err) {
+            console.error('Wizard redirect handling error:', err);
+            sessionStorage.setItem('wizard_error', err.message);
+        }
+        // Forward to setup-wizard.html (without the hash)
+        window.location.replace('setup-wizard.html');
+        return;
     }
 
     hideLoading();
