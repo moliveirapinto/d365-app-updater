@@ -442,12 +442,13 @@
             userProvidedClientId = savedClientId;
             document.getElementById('userClientId').value = savedClientId;
 
-            // Reconstruct MSAL and handle the redirect response
+            // Reconstruct MSAL — use the ROOT directory as redirect URI (must match what was used in loginRedirect)
+            const pathDir = window.location.pathname.substring(0, window.location.pathname.lastIndexOf('/') + 1);
             const msalConfig = {
                 auth: {
                     clientId: userProvidedClientId,
                     authority: 'https://login.microsoftonline.com/organizations',
-                    redirectUri: window.location.origin + window.location.pathname.substring(0, window.location.pathname.lastIndexOf('/') + 1) + 'setup-wizard.html'
+                    redirectUri: window.location.origin + pathDir
                 },
                 cache: {
                     cacheLocation: 'sessionStorage',
@@ -523,11 +524,13 @@
         }
 
         function initializeMSAL() {
+            // Use the ROOT directory as redirect URI (already registered in Azure AD)
+            const pathDir = window.location.pathname.substring(0, window.location.pathname.lastIndexOf('/') + 1);
             const msalConfig = {
                 auth: {
                     clientId: userProvidedClientId,
                     authority: 'https://login.microsoftonline.com/organizations',
-                    redirectUri: window.location.origin + window.location.pathname.substring(0, window.location.pathname.lastIndexOf('/') + 1) + 'setup-wizard.html'
+                    redirectUri: window.location.origin + pathDir
                 },
                 cache: {
                     cacheLocation: 'sessionStorage',

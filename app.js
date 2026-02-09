@@ -34,6 +34,14 @@ let _pendingRedirectAuth = false;
 // Initialize on page load
 document.addEventListener('DOMContentLoaded', function() {
     console.log('DOM Content Loaded');
+
+    // If returning from wizard auth redirect, forward to setup-wizard.html preserving the hash
+    if (sessionStorage.getItem('wizard_clientId')) {
+        const hash = window.location.hash;
+        window.location.replace('setup-wizard.html' + hash);
+        return; // Stop — don't initialize the main app
+    }
+
     hideLoading();
     
     if (typeof msal === 'undefined') {
