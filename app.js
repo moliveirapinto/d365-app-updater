@@ -224,12 +224,7 @@ async function handleAuthentication(event) {
         localStorage.setItem('d365_app_updater_pending_auth', 'true');
         
         await msalInstance.loginRedirect({
-            scopes: [
-                'openid',
-                'profile',
-                'https://api.powerplatform.com/.default',
-                'https://api.bap.microsoft.com/.default'
-            ]
+            scopes: ['openid', 'profile']
         });
         
         // Execution stops here — browser navigates to Microsoft login
