@@ -195,7 +195,7 @@ async function handleAuthentication(event) {
         await msalInstance.initialize();
         await msalInstance.handleRedirectPromise(); // Clear any stale redirect state
         
-        // Sign in and consent to both APIs
+        // Sign in (basic OpenID scopes only)
         showLoading('Authenticating...', 'Signing in to Microsoft');
         const accounts = msalInstance.getAllAccounts();
         let account;
@@ -204,27 +204,30 @@ async function handleAuthentication(event) {
             account = accounts[0];
         } else {
             const loginResult = await msalInstance.loginPopup({
-                scopes: ['https://api.powerplatform.com/.default'],
-                extraScopesToConsent: ['https://api.bap.microsoft.com/.default']
+                scopes: ['openid', 'profile']
             });
             account = loginResult.account;
         }
         
-        // Get Power Platform API token (silent - consent already granted)
+        // Acquire Power Platform API token (popup fallback for consent)
         showLoading('Authenticating...', 'Getting Power Platform API access');
         const ppRequest = { scopes: ['https://api.powerplatform.com/.default'], account };
-        const ppResult = await msalInstance.acquireTokenSilent(ppRequest);
+        let ppResult;
+        try {
+            ppResult = await msalInstance.acquireTokenSilent(ppRequest);
+        } catch (e) {
+            ppResult = await msalInstance.acquireTokenPopup(ppRequest);
+        }
         ppToken = ppResult.accessToken;
         
         console.log('Power Platform API token acquired');
         
-        // Eagerly acquire BAP token (popup fallback if consent wasn't granted)
+        // Acquire BAP token (popup fallback for consent)
         showLoading('Authenticating...', 'Getting BAP API access');
         const bapRequest = { scopes: ['https://api.bap.microsoft.com/.default'], account };
         try {
             await msalInstance.acquireTokenSilent(bapRequest);
         } catch (e) {
-            console.log('BAP silent failed, requesting consent via popup...');
             await msalInstance.acquireTokenPopup(bapRequest);
         }
         
