@@ -157,32 +157,81 @@ document.addEventListener('DOMContentLoaded', async function() {
     // If returning from wizard auth redirect, handle MSAL here on the root page
     // (MSAL requires redirect response to be processed on the same URL that was used as redirectUri)
     const wizardClientId = sessionStorage.getItem('wizard_clientId');
-    if (wizardClientId && window.location.hash) {
-        logInfo('Wizard redirect detected, handling...');
-        try {
-            const pathDir = window.location.pathname.substring(0, window.location.pathname.lastIndexOf('/') + 1);
-            const wizardMsalConfig = {
-                auth: {
-                    clientId: wizardClientId,
-                    authority: 'https://login.microsoftonline.com/organizations',
-                    redirectUri: window.location.origin + pathDir
-                },
-                cache: { cacheLocation: 'sessionStorage', storeAuthStateInCookie: false }
-            };
-            const wizardMsal = new msal.PublicClientApplication(wizardMsalConfig);
-            await wizardMsal.initialize();
-            const response = await wizardMsal.handleRedirectPromise();
-            if (response && response.accessToken) {
-                sessionStorage.setItem('wizard_accessToken', response.accessToken);
-                logInfo('Wizard token acquired');
-            }
-        } catch (err) {
-            logError('Wizard redirect handling error', err.message);
-            sessionStorage.setItem('wizard_error', err.message);
+    if (wizardClientId) {
+        logInfo('Wizard flow detected', { wizardClientId: wizardClientId.substring(0, 8) + '...', hasHash: !!window.location.hash });
+        
+        // First check if the hash contains an error
+        if (window.location.hash && window.location.hash.includes('error')) {
+            const hashParams = new URLSearchParams(window.location.hash.substring(1));
+            const error = hashParams.get('error');
+            const errorDesc = decodeURIComponent(hashParams.get('error_description') || 'Unknown error');
+            logError('Wizard auth error in URL', { error, errorDesc });
+            sessionStorage.setItem('wizard_error', errorDesc);
+            sessionStorage.removeItem('wizard_clientId');
+            window.location.replace('setup-wizard.html');
+            return;
         }
-        // Forward to setup-wizard.html (without the hash)
-        window.location.replace('setup-wizard.html');
-        return;
+        
+        // Only process if we have a hash (returning from redirect)
+        if (window.location.hash) {
+            logInfo('Processing wizard redirect...');
+            try {
+                const pathDir = window.location.pathname.substring(0, window.location.pathname.lastIndexOf('/') + 1);
+                const wizardMsalConfig = {
+                    auth: {
+                        clientId: wizardClientId,
+                        authority: 'https://login.microsoftonline.com/organizations',
+                        redirectUri: window.location.origin + pathDir
+                    },
+                    cache: { cacheLocation: 'sessionStorage', storeAuthStateInCookie: false }
+                };
+                const wizardMsal = new msal.PublicClientApplication(wizardMsalConfig);
+                await wizardMsal.initialize();
+                logInfo('Wizard MSAL initialized, calling handleRedirectPromise...');
+                
+                const response = await wizardMsal.handleRedirectPromise();
+                logInfo('Wizard handleRedirectPromise result', response ? { hasToken: !!response.accessToken, scopes: response.scopes } : 'null');
+                
+                if (response && response.accessToken) {
+                    sessionStorage.setItem('wizard_accessToken', response.accessToken);
+                    logInfo('Wizard token saved to sessionStorage');
+                } else {
+                    // No response from redirect, try to get token silently if there's an account
+                    const accounts = wizardMsal.getAllAccounts();
+                    logInfo('Wizard accounts', accounts.length);
+                    if (accounts.length > 0) {
+                        try {
+                            const silentResult = await wizardMsal.acquireTokenSilent({
+                                scopes: ['https://graph.microsoft.com/Application.ReadWrite.All', 'https://graph.microsoft.com/DelegatedPermissionGrant.ReadWrite.All'],
+                                account: accounts[0]
+                            });
+                            if (silentResult && silentResult.accessToken) {
+                                sessionStorage.setItem('wizard_accessToken', silentResult.accessToken);
+                                logInfo('Wizard token acquired silently');
+                            }
+                        } catch (silentErr) {
+                            logWarn('Wizard silent token acquisition failed', silentErr.message);
+                        }
+                    }
+                }
+                
+                // Check if we got a token
+                if (!sessionStorage.getItem('wizard_accessToken')) {
+                    logError('No wizard token acquired after redirect processing');
+                    sessionStorage.setItem('wizard_error', 'Failed to acquire access token. Please ensure you have admin permissions and try again.');
+                }
+            } catch (err) {
+                logError('Wizard redirect handling error', err.message);
+                sessionStorage.setItem('wizard_error', err.message);
+            }
+            // Forward to setup-wizard.html (without the hash)
+            window.location.replace('setup-wizard.html');
+            return;
+        } else {
+            // wizardClientId is set but no hash - user might be stuck, clear and let them restart
+            logWarn('Wizard clientId set but no hash, clearing wizard state');
+            sessionStorage.removeItem('wizard_clientId');
+        }
     }
 
     hideLoading();

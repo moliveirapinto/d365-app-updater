@@ -199,6 +199,13 @@
             </div>
 
             <div class="main-card">
+            <!-- Reset link for when stuck -->
+            <div style="text-align: right; margin-bottom: 0.5rem;">
+                <a href="#" onclick="resetWizard(); return false;" style="font-size: 0.75rem; color: #9ca3af;">
+                    <i class="fas fa-redo"></i> Reset Wizard
+                </a>
+            </div>
+            
             <!-- Step Indicator -->
             <div class="step-indicator">
                 <div class="step active" id="stepInd1">
@@ -434,26 +441,57 @@
             bap: { id: '0e0bf3cc-3078-4fd4-9ef3-cb6dc0245b10', scopeName: 'user_impersonation', name: 'BAP API' }
         };
 
+        // Debug logging for wizard
+        function wizardLog(msg, data) {
+            const ts = new Date().toISOString().split('T')[1].split('.')[0];
+            console.log(`[WIZARD ${ts}] ${msg}`, data || '');
+        }
+
         // On page load: check if we're returning from a redirect login
         document.addEventListener('DOMContentLoaded', async function() {
-            const savedClientId = sessionStorage.getItem('wizard_clientId');
-            if (!savedClientId) return; // No pending wizard flow
+            wizardLog('Page loaded', { 
+                url: window.location.href,
+                hasWizardClientId: !!sessionStorage.getItem('wizard_clientId'),
+                hasWizardToken: !!sessionStorage.getItem('wizard_accessToken'),
+                hasWizardError: !!sessionStorage.getItem('wizard_error')
+            });
 
-            // Check for error from redirect processing
+            const savedClientId = sessionStorage.getItem('wizard_clientId');
+            
+            // Check for error from redirect processing (even if no savedClientId, error might exist)
             const wizardError = sessionStorage.getItem('wizard_error');
             if (wizardError) {
+                wizardLog('Error found in storage', wizardError);
                 sessionStorage.removeItem('wizard_error');
                 sessionStorage.removeItem('wizard_clientId');
+                sessionStorage.removeItem('wizard_accessToken');
                 showError(2, 'Sign-in failed: ' + wizardError);
                 moveToStep(2);
                 return;
             }
 
+            if (!savedClientId) {
+                wizardLog('No pending wizard flow (no clientId in storage)');
+                return; // No pending wizard flow
+            }
+
             // Check for access token (set by app.js after processing redirect)
             const accessToken = sessionStorage.getItem('wizard_accessToken');
-            if (!accessToken) return; // No token yet, user hasn't completed sign-in
+            wizardLog('Checking for access token', { hasToken: !!accessToken, tokenPreview: accessToken ? accessToken.substring(0, 20) + '...' : 'none' });
+            
+            if (!accessToken) {
+                // No token and no error - something went wrong, show helpful message
+                wizardLog('No token found, showing retry message');
+                sessionStorage.removeItem('wizard_clientId');
+                showError(2, 'Authentication did not complete. This can happen if pop-ups were blocked or the sign-in was cancelled. Please try again.');
+                moveToStep(2);
+                // Pre-fill the client ID so user doesn't have to re-enter
+                document.getElementById('userClientId').value = savedClientId;
+                return;
+            }
 
             // We have the token! Clean up and proceed
+            wizardLog('Token found! Proceeding to step 3');
             userProvidedClientId = savedClientId;
             adminAccessToken = accessToken;
             document.getElementById('userClientId').value = savedClientId;
@@ -521,15 +559,34 @@
             signInAdmin();
         }
 
+        function resetWizard() {
+            wizardLog('Resetting wizard...');
+            // Clear all wizard-related storage
+            sessionStorage.removeItem('wizard_clientId');
+            sessionStorage.removeItem('wizard_accessToken');
+            sessionStorage.removeItem('wizard_error');
+            // Clear MSAL state
+            Object.keys(sessionStorage).forEach(key => {
+                if (key.startsWith('msal.')) sessionStorage.removeItem(key);
+            });
+            // Reload page
+            window.location.href = window.location.pathname;
+        }
+
         async function signInAdmin() {
             try {
                 await msalInstance.initialize();
+                wizardLog('MSAL initialized for sign-in');
 
                 document.getElementById('signInHint').style.display = 'block';
                 document.getElementById('progressText').textContent = 'Redirecting to Microsoft sign-in...';
                 
                 // Save client ID so we can resume after redirect
                 sessionStorage.setItem('wizard_clientId', userProvidedClientId);
+                wizardLog('Saved clientId to sessionStorage, initiating loginRedirect...', {
+                    clientId: userProvidedClientId.substring(0, 8) + '...',
+                    redirectUri: msalInstance.getConfiguration().auth.redirectUri
+                });
 
                 await msalInstance.loginRedirect({
                     scopes: ['https://graph.microsoft.com/Application.ReadWrite.All', 'https://graph.microsoft.com/DelegatedPermissionGrant.ReadWrite.All'],
@@ -537,7 +594,7 @@
                 });
                 // Browser navigates away — execution stops here
             } catch (error) {
-                console.error('Login error:', error);
+                wizardLog('Login error', error.message);
                 sessionStorage.removeItem('wizard_clientId');
                 showError(2, 'Failed to sign in. Make sure you have Application Administrator or Global Admin role. Error: ' + error.message);
             }
