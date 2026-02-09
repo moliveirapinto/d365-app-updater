@@ -17,7 +17,7 @@ function createMsalConfig(tenantId, clientId) {
         auth: {
             clientId: clientId,
             authority: `https://login.microsoftonline.com/${tenantId}`,
-            redirectUri: window.location.origin + window.location.pathname,
+            redirectUri: window.location.origin + window.location.pathname.replace(/\/[^\/]*\.[^\/]*$/, '/'),
         },
         cache: {
             cacheLocation: 'localStorage',
