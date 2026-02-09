@@ -194,9 +194,6 @@
     <div class="wizard-page">
         <div class="wizard-wrapper">
             <div class="wizard-brand">
-                <div class="brand-icon">
-                    <i class="fas fa-magic fa-lg" style="color: white;"></i>
-                </div>
                 <h1>Setup Wizard</h1>
                 <p>Set up your Azure AD app registration in 60 seconds</p>
             </div>
@@ -396,9 +393,11 @@
                     </div>
 
                     <div class="alert alert-info text-start mt-3">
-                        <strong><i class="fas fa-key me-2"></i>Your Client ID:</strong>
-                        <div class="code-box mt-2" id="clientIdDisplay">Loading...</div>
-                        <button class="btn btn-sm btn-link text-muted p-0" style="font-size:0.78rem;" onclick="copyClientId()">Copy</button>
+                        <strong>Your Client ID:</strong>
+                        <div class="d-flex align-items-center gap-2 mt-2">
+                            <div class="code-box flex-grow-1 mb-0" id="clientIdDisplay" style="margin:0;">Loading...</div>
+                            <button class="btn btn-sm btn-light border" style="padding:0.35rem 0.5rem; line-height:1;" onclick="copyClientId()" title="Copy"><i class="fas fa-copy" style="font-size:0.85rem; color:#6b7280;"></i></button>
+                        </div>
                     </div>
 
                     <h5 class="mt-4 mb-3">Next Steps:</h5>
