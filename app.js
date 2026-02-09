@@ -7,6 +7,97 @@ let apps = [];
 let allEnvironments = []; // Cached list of all environments
 let selectedApps = new Set(); // Multi-select tracking
 
+// ═══════════════════════════════════════════════════════════════════════════
+// LOGGING SYSTEM - Persists across redirects for debugging auth flows
+// ═══════════════════════════════════════════════════════════════════════════
+const LOG_STORAGE_KEY = 'd365_app_logs';
+const MAX_LOGS = 200;
+
+function appLog(level, message, data = null) {
+    const timestamp = new Date().toISOString();
+    const logEntry = { timestamp, level, message, data: data ? JSON.stringify(data) : null };
+    
+    // Console output
+    const consoleMsg = `[${timestamp}] [${level}] ${message}`;
+    if (level === 'ERROR') {
+        console.error(consoleMsg, data || '');
+    } else if (level === 'WARN') {
+        console.warn(consoleMsg, data || '');
+    } else {
+        console.log(consoleMsg, data || '');
+    }
+    
+    // Persist to sessionStorage (survives redirects within same session)
+    try {
+        const logs = JSON.parse(sessionStorage.getItem(LOG_STORAGE_KEY) || '[]');
+        logs.push(logEntry);
+        // Keep only last MAX_LOGS entries
+        while (logs.length > MAX_LOGS) logs.shift();
+        sessionStorage.setItem(LOG_STORAGE_KEY, JSON.stringify(logs));
+    } catch (e) {
+        console.error('Failed to persist log:', e);
+    }
+    
+    // Update UI log panel if visible
+    updateLogPanel();
+}
+
+function updateLogPanel() {
+    const panel = document.getElementById('logPanel');
+    const content = document.getElementById('logContent');
+    if (!panel || !content) return;
+    
+    try {
+        const logs = JSON.parse(sessionStorage.getItem(LOG_STORAGE_KEY) || '[]');
+        content.innerHTML = logs.map(log => {
+            const color = log.level === 'ERROR' ? '#ff4444' : log.level === 'WARN' ? '#ffaa00' : '#00cc00';
+            const time = log.timestamp.split('T')[1].split('.')[0];
+            const dataStr = log.data ? `\n    └─ ${log.data}` : '';
+            return `<div style="color:${color};margin:2px 0;"><span style="color:#888">[${time}]</span> <b>[${log.level}]</b> ${log.message}${dataStr}</div>`;
+        }).join('');
+        content.scrollTop = content.scrollHeight;
+    } catch (e) {}
+}
+
+function clearLogs() {
+    sessionStorage.removeItem(LOG_STORAGE_KEY);
+    updateLogPanel();
+    appLog('INFO', 'Logs cleared');
+}
+
+function exportLogs() {
+    try {
+        const logs = JSON.parse(sessionStorage.getItem(LOG_STORAGE_KEY) || '[]');
+        const text = logs.map(l => `[${l.timestamp}] [${l.level}] ${l.message}${l.data ? ' | ' + l.data : ''}`).join('\n');
+        const blob = new Blob([text], { type: 'text/plain' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `d365-app-logs-${new Date().toISOString().replace(/[:.]/g, '-')}.txt`;
+        a.click();
+        URL.revokeObjectURL(url);
+    } catch (e) {
+        alert('Failed to export logs: ' + e.message);
+    }
+}
+
+function toggleLogPanel() {
+    const panel = document.getElementById('logPanel');
+    if (panel) {
+        const isHidden = panel.style.display === 'none';
+        panel.style.display = isHidden ? 'block' : 'none';
+        if (isHidden) updateLogPanel();
+    }
+}
+
+// Shorthand logging functions
+const logInfo = (msg, data) => appLog('INFO', msg, data);
+const logWarn = (msg, data) => appLog('WARN', msg, data);
+const logError = (msg, data) => appLog('ERROR', msg, data);
+const logDebug = (msg, data) => appLog('DEBUG', msg, data);
+
+// ═══════════════════════════════════════════════════════════════════════════
+
 // Supabase config for usage tracking
 const SUPABASE_URL = 'https://fpekzltxukikaixebeeu.supabase.co';
 const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZwZWt6bHR4dWtpa2FpeGViZWV1Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzA0MDU0ODEsImV4cCI6MjA4NTk4MTQ4MX0.uH4JgKbf_-Al_iArzEy6UZ3edJNzFSCBVlMNI04li0Y';
@@ -33,12 +124,16 @@ let _pendingRedirectAuth = false;
 
 // Initialize on page load
 document.addEventListener('DOMContentLoaded', async function() {
-    console.log('DOM Content Loaded');
+    logInfo('=== APP INITIALIZATION ===');
+    logInfo('URL', { href: window.location.href, hash: window.location.hash ? 'present' : 'none', pathname: window.location.pathname });
+    logInfo('Auth step in storage', sessionStorage.getItem('d365_auth_step'));
+    logInfo('Saved creds exist', !!localStorage.getItem('d365_app_updater_creds'));
 
     // If returning from wizard auth redirect, handle MSAL here on the root page
     // (MSAL requires redirect response to be processed on the same URL that was used as redirectUri)
     const wizardClientId = sessionStorage.getItem('wizard_clientId');
     if (wizardClientId && window.location.hash) {
+        logInfo('Wizard redirect detected, handling...');
         try {
             const pathDir = window.location.pathname.substring(0, window.location.pathname.lastIndexOf('/') + 1);
             const wizardMsalConfig = {
@@ -54,9 +149,10 @@ document.addEventListener('DOMContentLoaded', async function() {
             const response = await wizardMsal.handleRedirectPromise();
             if (response && response.accessToken) {
                 sessionStorage.setItem('wizard_accessToken', response.accessToken);
+                logInfo('Wizard token acquired');
             }
         } catch (err) {
-            console.error('Wizard redirect handling error:', err);
+            logError('Wizard redirect handling error', err.message);
             sessionStorage.setItem('wizard_error', err.message);
         }
         // Forward to setup-wizard.html (without the hash)
@@ -67,9 +163,11 @@ document.addEventListener('DOMContentLoaded', async function() {
     hideLoading();
     
     if (typeof msal === 'undefined') {
+        logError('MSAL library failed to load');
         alert('Error: MSAL library failed to load.');
         return;
     }
+    logInfo('MSAL library loaded successfully');
     
     const redirectUriElement = document.getElementById('redirectUri');
     if (redirectUriElement) {
@@ -116,105 +214,169 @@ function loadSavedCredentials() {
 
 // Handle redirect response when returning from Microsoft login redirect
 async function handleRedirectResponse() {
+    logInfo('=== handleRedirectResponse START ===');
+    
     const savedCreds = localStorage.getItem('d365_app_updater_creds');
-    if (!savedCreds) return;
+    if (!savedCreds) {
+        logInfo('No saved credentials, user must log in manually');
+        return;
+    }
 
     let creds;
     try {
         creds = JSON.parse(savedCreds);
+        logDebug('Parsed saved credentials', { orgUrl: creds.orgUrl, tenantId: creds.tenantId?.substring(0,8) + '...', hasClientId: !!creds.clientId });
     } catch (e) {
+        logError('Failed to parse saved credentials', e.message);
         return;
     }
 
     const orgUrlValue = creds.orgUrl || creds.organizationId || creds.environmentId || '';
     const tenantId = creds.tenantId || '';
     const clientId = creds.clientId || '';
-    if (!tenantId || !clientId || !orgUrlValue) return;
+    
+    if (!tenantId || !clientId || !orgUrlValue) {
+        logWarn('Missing required credentials', { hasOrgUrl: !!orgUrlValue, hasTenantId: !!tenantId, hasClientId: !!clientId });
+        return;
+    }
 
     try {
+        logInfo('Creating MSAL instance...');
         const msalConfig = createMsalConfig(tenantId, clientId);
+        logDebug('MSAL config', { redirectUri: msalConfig.auth.redirectUri, authority: msalConfig.auth.authority });
+        
         msalInstance = new msal.PublicClientApplication(msalConfig);
         await msalInstance.initialize();
+        logInfo('MSAL initialized');
 
         // Check if we're returning from a redirect login
+        logInfo('Calling handleRedirectPromise...');
         const redirectResult = await msalInstance.handleRedirectPromise();
+        logInfo('handleRedirectPromise result', redirectResult ? { 
+            hasToken: !!redirectResult.accessToken, 
+            scopes: redirectResult.scopes,
+            account: redirectResult.account?.username 
+        } : 'null');
 
         const accounts = msalInstance.getAllAccounts();
+        logInfo('MSAL accounts found', { count: accounts.length, accounts: accounts.map(a => a.username) });
+        
         if (accounts.length === 0) {
-            // No cached session, user must log in manually
+            logInfo('No accounts in cache, user must log in manually');
             msalInstance = null;
-            // Clear any pending auth state
             sessionStorage.removeItem('d365_auth_step');
             return;
         }
 
         const account = accounts[0];
+        logInfo('Using account', account.username);
 
         // Track which step of auth we're on to avoid redirect loops
-        const authStep = sessionStorage.getItem('d365_auth_step') || 'initial';
-        console.log('Auth step:', authStep, 'Redirect result:', redirectResult ? 'present' : 'none');
+        const authStep = sessionStorage.getItem('d365_auth_step') || 'none';
+        logInfo('Current auth step', authStep);
+        
+        // Check redirect counter to prevent infinite loops
+        let redirectCount = parseInt(sessionStorage.getItem('d365_redirect_count') || '0', 10);
+        logInfo('Redirect count', redirectCount);
+        
+        if (redirectCount > 5) {
+            logError('Too many redirects, breaking loop');
+            sessionStorage.removeItem('d365_auth_step');
+            sessionStorage.removeItem('d365_redirect_count');
+            throw new Error('Authentication failed after multiple attempts. Please clear your browser cache and try again.');
+        }
 
         // If returning from a runtime BAP token redirect, clear step and continue
         if (authStep === 'acquiring_bap_runtime' && redirectResult) {
-            console.log('Returned from runtime BAP token redirect');
+            logInfo('Returned from runtime BAP token redirect, clearing step');
             sessionStorage.removeItem('d365_auth_step');
         }
 
-        // If we came back from a redirect, or we have a cached session, continue auth flow
+        // If we just came back from login (initial or login_redirect step), the redirectResult is for the login
+        // We need to proceed to acquire PP and BAP tokens
+        if ((authStep === 'login_redirect' || authStep === 'initial') && redirectResult) {
+            logInfo('Returned from initial login redirect, proceeding to acquire API tokens');
+            sessionStorage.removeItem('d365_auth_step'); // Clear so we can proceed
+        }
+
         showLoading('Authenticating...', 'Restoring your session');
 
-        // Try to acquire Power Platform token
+        // ─── Acquire Power Platform token ───────────────────────────────────────
+        logInfo('Acquiring Power Platform token...');
         const ppRequest = { scopes: ['https://api.powerplatform.com/.default'], account };
         let ppResult;
         
-        // If we just came back from PP token redirect, the token should be in redirectResult or cache
-        if (authStep === 'acquiring_pp' && redirectResult && redirectResult.accessToken) {
+        // Check if redirect result contains PP scope
+        const isPPRedirectResult = redirectResult && redirectResult.scopes && 
+            redirectResult.scopes.some(s => s.includes('api.powerplatform.com'));
+        
+        if (authStep === 'acquiring_pp' && isPPRedirectResult && redirectResult.accessToken) {
             ppResult = redirectResult;
-            console.log('Using PP token from redirect result');
+            logInfo('Using PP token from redirect result', { scopes: redirectResult.scopes });
+            sessionStorage.removeItem('d365_auth_step');
+            sessionStorage.removeItem('d365_redirect_count');
         } else {
             try {
+                logDebug('Trying acquireTokenSilent for PP...');
                 ppResult = await msalInstance.acquireTokenSilent(ppRequest);
+                logInfo('PP token acquired silently');
             } catch (e) {
-                // Only redirect if we haven't already tried this step
+                logWarn('acquireTokenSilent for PP failed', { error: e.message, errorCode: e.errorCode });
+                // Only redirect if we haven't tried too many times
                 if (authStep !== 'acquiring_pp') {
-                    console.log('Need consent for Power Platform API, redirecting...');
+                    logInfo('Redirecting for PP token consent...');
                     sessionStorage.setItem('d365_auth_step', 'acquiring_pp');
+                    sessionStorage.setItem('d365_redirect_count', String(redirectCount + 1));
                     await msalInstance.acquireTokenRedirect(ppRequest);
-                    return; // Page will reload
+                    return;
                 } else {
-                    // We already tried redirecting for this scope and it still fails
-                    throw new Error('Failed to acquire Power Platform token after consent. Please check your app registration permissions.');
+                    logError('Already tried PP redirect, still failing', e.message);
+                    sessionStorage.removeItem('d365_auth_step');
+                    sessionStorage.removeItem('d365_redirect_count');
+                    throw new Error('Failed to acquire Power Platform token. Error: ' + e.message + '. Please check your app registration has the correct API permissions.');
                 }
             }
         }
         ppToken = ppResult.accessToken;
+        logInfo('PP token acquired successfully');
 
-        // Try to acquire BAP token
+        // ─── Acquire BAP token ──────────────────────────────────────────────────
+        logInfo('Acquiring BAP token...');
         const bapRequest = { scopes: ['https://api.bap.microsoft.com/.default'], account };
         
-        // If we just came back from BAP token redirect, use that result
-        if (authStep === 'acquiring_bap' && redirectResult && redirectResult.accessToken) {
-            console.log('Using BAP token from redirect result');
-            // Token is now in cache, we can proceed
+        // Check if redirect result contains BAP scope
+        const isBAPRedirectResult = redirectResult && redirectResult.scopes && 
+            redirectResult.scopes.some(s => s.includes('api.bap.microsoft.com'));
+        
+        if (authStep === 'acquiring_bap' && isBAPRedirectResult && redirectResult.accessToken) {
+            logInfo('Using BAP token from redirect result', { scopes: redirectResult.scopes });
+            sessionStorage.removeItem('d365_auth_step');
+            sessionStorage.removeItem('d365_redirect_count');
         } else {
             try {
+                logDebug('Trying acquireTokenSilent for BAP...');
                 await msalInstance.acquireTokenSilent(bapRequest);
+                logInfo('BAP token acquired silently');
             } catch (e) {
-                // Only redirect if we haven't already tried this step
+                logWarn('acquireTokenSilent for BAP failed', { error: e.message, errorCode: e.errorCode });
                 if (authStep !== 'acquiring_bap') {
-                    console.log('Need consent for BAP API, redirecting...');
+                    logInfo('Redirecting for BAP token consent...');
                     sessionStorage.setItem('d365_auth_step', 'acquiring_bap');
+                    sessionStorage.setItem('d365_redirect_count', String(redirectCount + 1));
                     await msalInstance.acquireTokenRedirect(bapRequest);
-                    return; // Page will reload
+                    return;
                 } else {
-                    // We already tried redirecting for this scope and it still fails
-                    throw new Error('Failed to acquire BAP token after consent. Please check your app registration permissions.');
+                    logError('Already tried BAP redirect, still failing', e.message);
+                    sessionStorage.removeItem('d365_auth_step');
+                    sessionStorage.removeItem('d365_redirect_count');
+                    throw new Error('Failed to acquire BAP token. Error: ' + e.message + '. Please check your app registration has the correct API permissions.');
                 }
             }
         }
 
         // Clear auth step - we're done with redirects
         sessionStorage.removeItem('d365_auth_step');
+        logInfo('Auth step cleared, proceeding to resolve environment');
 
         showLoading('Authenticating...', 'Resolving environment');
 
@@ -224,11 +386,13 @@ async function handleRedirectResponse() {
             normalizedOrgUrl = 'https://' + normalizedOrgUrl;
         }
         normalizedOrgUrl = normalizedOrgUrl.replace(/\/+$/, '');
+        logInfo('Resolving environment for URL', normalizedOrgUrl);
 
         environmentId = await resolveOrgUrlToEnvironmentId(normalizedOrgUrl);
         if (!environmentId) {
             throw new Error('Could not resolve environment. Please verify the Organization URL and your permissions.');
         }
+        logInfo('Environment resolved', environmentId);
 
         currentOrgUrl = normalizedOrgUrl;
 
@@ -240,13 +404,13 @@ async function handleRedirectResponse() {
         document.getElementById('authSection').classList.add('hidden');
         document.getElementById('appsSection').classList.remove('hidden');
 
+        logInfo('=== AUTH SUCCESS ===', account.username);
         await loadApplications();
 
-        console.log('Auth successful for', account.username);
     } catch (e) {
-        // Clear auth step on error to prevent loops
         sessionStorage.removeItem('d365_auth_step');
-        console.error('Auto-login failed:', e.message);
+        sessionStorage.removeItem('d365_redirect_count');
+        logError('=== AUTH FAILED ===', e.message);
         hideLoading();
         showError('Authentication failed: ' + e.message);
         msalInstance = null;
@@ -259,13 +423,18 @@ async function handleRedirectResponse() {
 async function handleAuthentication(event) {
     event.preventDefault();
     
+    logInfo('=== handleAuthentication START (user clicked Connect) ===');
+    
     let orgUrlValue = document.getElementById('orgUrl').value.trim();
     const tenantId = document.getElementById('tenantId').value.trim();
     const clientId = document.getElementById('clientId').value.trim();
     const rememberMe = document.getElementById('rememberMe').checked;
     
+    logInfo('Form values', { orgUrl: orgUrlValue, tenantId: tenantId.substring(0,8) + '...', clientId: clientId.substring(0,8) + '...', rememberMe });
+    
     const guidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
     if (!guidRegex.test(tenantId) || !guidRegex.test(clientId)) {
+        logError('Invalid GUID format');
         showError('Invalid GUID format. Tenant ID and Client ID must be valid GUIDs.');
         return;
     }
@@ -277,29 +446,36 @@ async function handleAuthentication(event) {
     orgUrlValue = orgUrlValue.replace(/\/+$/, ''); // remove trailing slashes
     
     if (!orgUrlValue.includes('.dynamics.com')) {
+        logError('Invalid Organization URL');
         showError('Invalid Organization URL. It should look like https://yourorg.crm.dynamics.com');
         return;
     }
     
     if (rememberMe) {
         localStorage.setItem('d365_app_updater_creds', JSON.stringify({ orgUrl: orgUrlValue, tenantId, clientId }));
+        logInfo('Credentials saved to localStorage');
     }
     
     // Clear any previous auth step state to start fresh
     sessionStorage.removeItem('d365_auth_step');
+    logInfo('Cleared previous auth step');
     
     try {
         showLoading('Authenticating...', 'Connecting to Microsoft');
         
         const msalConfig = createMsalConfig(tenantId, clientId);
+        logDebug('MSAL config', { redirectUri: msalConfig.auth.redirectUri, authority: msalConfig.auth.authority });
+        
         msalInstance = new msal.PublicClientApplication(msalConfig);
         await msalInstance.initialize();
+        logInfo('MSAL initialized');
         
         // Redirect to Microsoft login — the page will reload and handleRedirectResponse() will continue
         showLoading('Authenticating...', 'Redirecting to Microsoft sign-in...');
         
         // Save the pending auth state so we know to continue after redirect
-        sessionStorage.setItem('d365_auth_step', 'initial');
+        sessionStorage.setItem('d365_auth_step', 'login_redirect');
+        logInfo('Set auth step to login_redirect, calling loginRedirect...');
         
         await msalInstance.loginRedirect({
             scopes: ['openid', 'profile']
