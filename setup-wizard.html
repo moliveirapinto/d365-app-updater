@@ -314,7 +314,7 @@
 
                 <div class="alert alert-info" style="display: none;" id="signInHint">
                     <i class="fas fa-info-circle me-2"></i>
-                    A popup window will open for you to sign in. Make sure popups are enabled.
+                    You will be redirected to Microsoft to sign in. After signing in, you'll be returned here automatically.
                 </div>
 
                 <div class="error-box" id="error2">
@@ -434,6 +434,68 @@
             bap: { id: '0e0bf3cc-3078-4fd4-9ef3-cb6dc0245b10', scopeName: 'user_impersonation', name: 'BAP API' }
         };
 
+        // On page load: check if we're returning from a redirect login
+        document.addEventListener('DOMContentLoaded', async function() {
+            const savedClientId = sessionStorage.getItem('wizard_clientId');
+            if (!savedClientId) return; // No pending wizard flow
+
+            userProvidedClientId = savedClientId;
+            document.getElementById('userClientId').value = savedClientId;
+
+            // Reconstruct MSAL and handle the redirect response
+            const msalConfig = {
+                auth: {
+                    clientId: userProvidedClientId,
+                    authority: 'https://login.microsoftonline.com/organizations',
+                    redirectUri: window.location.origin + window.location.pathname.substring(0, window.location.pathname.lastIndexOf('/') + 1) + 'setup-wizard.html'
+                },
+                cache: {
+                    cacheLocation: 'sessionStorage',
+                    storeAuthStateInCookie: false
+                }
+            };
+
+            msalInstance = new msal.PublicClientApplication(msalConfig);
+            await msalInstance.initialize();
+
+            try {
+                const response = await msalInstance.handleRedirectPromise();
+                if (response && response.accessToken) {
+                    // We got the token back from the redirect
+                    adminAccessToken = response.accessToken;
+                    sessionStorage.removeItem('wizard_clientId'); // Clean up
+                    moveToStep(3);
+                    await addPermissions();
+                } else {
+                    // Redirect happened but no token — try silent
+                    const accounts = msalInstance.getAllAccounts();
+                    if (accounts.length > 0) {
+                        try {
+                            const silentResult = await msalInstance.acquireTokenSilent({
+                                scopes: ['https://graph.microsoft.com/Application.ReadWrite.All', 'https://graph.microsoft.com/DelegatedPermissionGrant.ReadWrite.All'],
+                                account: accounts[0]
+                            });
+                            adminAccessToken = silentResult.accessToken;
+                            sessionStorage.removeItem('wizard_clientId');
+                            moveToStep(3);
+                            await addPermissions();
+                        } catch (e) {
+                            // Silent failed, user needs to start over
+                            sessionStorage.removeItem('wizard_clientId');
+                            console.warn('Silent token acquisition failed after redirect:', e);
+                        }
+                    } else {
+                        sessionStorage.removeItem('wizard_clientId');
+                    }
+                }
+            } catch (err) {
+                sessionStorage.removeItem('wizard_clientId');
+                console.error('Redirect handling error:', err);
+                showError(2, 'Sign-in failed: ' + err.message);
+                moveToStep(2);
+            }
+        });
+
         function copyRedirectUri() {
             const text = document.getElementById('redirectUriDisplay').value;
             navigator.clipboard.writeText(text).then(() => {
@@ -465,7 +527,7 @@
                 auth: {
                     clientId: userProvidedClientId,
                     authority: 'https://login.microsoftonline.com/organizations',
-                    redirectUri: 'https://moliveirapinto.github.io/d365-app-updater/'
+                    redirectUri: window.location.origin + window.location.pathname.substring(0, window.location.pathname.lastIndexOf('/') + 1) + 'setup-wizard.html'
                 },
                 cache: {
                     cacheLocation: 'sessionStorage',
@@ -480,21 +542,22 @@
 
         async function signInAdmin() {
             try {
-                document.getElementById('signInHint').style.display = 'block';
-                document.getElementById('progressText').textContent = 'Please sign in when prompted...';
-                
-                const loginRequest = {
-                    scopes: ['Application.ReadWrite.All', 'DelegatedPermissionGrant.ReadWrite.All'],
-                    prompt: 'select_account'
-                };
+                await msalInstance.initialize();
 
-                const response = await msalInstance.loginPopup(loginRequest);
-                adminAccessToken = response.accessToken;
+                document.getElementById('signInHint').style.display = 'block';
+                document.getElementById('progressText').textContent = 'Redirecting to Microsoft sign-in...';
                 
-                moveToStep(3);
-                await addPermissions();
+                // Save client ID so we can resume after redirect
+                sessionStorage.setItem('wizard_clientId', userProvidedClientId);
+
+                await msalInstance.loginRedirect({
+                    scopes: ['https://graph.microsoft.com/Application.ReadWrite.All', 'https://graph.microsoft.com/DelegatedPermissionGrant.ReadWrite.All'],
+                    prompt: 'select_account'
+                });
+                // Browser navigates away — execution stops here
             } catch (error) {
                 console.error('Login error:', error);
+                sessionStorage.removeItem('wizard_clientId');
                 showError(2, 'Failed to sign in. Make sure you have Application Administrator or Global Admin role. Error: ' + error.message);
             }
         }
@@ -724,18 +787,12 @@
             adminAccessToken = null;
             userProvidedClientId = null;
             msalInstance = null;
+            sessionStorage.removeItem('wizard_clientId');
             document.getElementById('userClientId').value = '';
             showError(1, null);
             showError(2, null);
             showError(3, null);
             moveToStep(1);
-        }
-
-        // Handle redirect after popup (if needed)
-        if (msalInstance) {
-            msalInstance.handleRedirectPromise().catch(err => {
-                console.error('Redirect error:', err);
-            });
         }
     </script>
 
