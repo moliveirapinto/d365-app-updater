@@ -28,6 +28,9 @@ function createMsalConfig(tenantId, clientId) {
     };
 }
 
+// Flag to track if we're resuming from a redirect
+let _pendingRedirectAuth = false;
+
 // Initialize on page load
 document.addEventListener('DOMContentLoaded', function() {
     console.log('DOM Content Loaded');
@@ -60,10 +63,10 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     });
     
-    // Try to auto-login if we have saved credentials and a cached MSAL session
-    tryAutoLogin();
-    
-    console.log('App initialized');
+    // Try to handle redirect response first, then fall back to auto-login
+    handleRedirectResponse().then(() => {
+        console.log('App initialized');
+    });
 });
 
 // Load saved credentials
@@ -81,8 +84,8 @@ function loadSavedCredentials() {
     }
 }
 
-// Auto-login: silently resume session if MSAL tokens are cached
-async function tryAutoLogin() {
+// Handle redirect response when returning from Microsoft login redirect
+async function handleRedirectResponse() {
     const savedCreds = localStorage.getItem('d365_app_updater_creds');
     if (!savedCreds) return;
 
@@ -103,6 +106,9 @@ async function tryAutoLogin() {
         msalInstance = new msal.PublicClientApplication(msalConfig);
         await msalInstance.initialize();
 
+        // Check if we're returning from a redirect login
+        const redirectResult = await msalInstance.handleRedirectPromise();
+
         const accounts = msalInstance.getAllAccounts();
         if (accounts.length === 0) {
             // No cached session, user must log in manually
@@ -110,18 +116,34 @@ async function tryAutoLogin() {
             return;
         }
 
-        showLoading('Reconnecting...', 'Restoring your session');
+        const account = accounts[0];
+
+        // If we came back from a redirect, or we have a cached session, continue auth flow
+        showLoading('Authenticating...', 'Restoring your session');
 
         // Try to silently acquire Power Platform token
-        const ppRequest = { scopes: ['https://api.powerplatform.com/.default'], account: accounts[0] };
-        const ppResult = await msalInstance.acquireTokenSilent(ppRequest);
+        const ppRequest = { scopes: ['https://api.powerplatform.com/.default'], account };
+        let ppResult;
+        try {
+            ppResult = await msalInstance.acquireTokenSilent(ppRequest);
+        } catch (e) {
+            // Need consent — redirect for it
+            msalInstance.acquireTokenRedirect(ppRequest);
+            return; // Page will reload
+        }
         ppToken = ppResult.accessToken;
 
-        // Try to silently acquire BAP token (no interactive fallback during auto-login)
-        const bapRequest = { scopes: ['https://api.bap.microsoft.com/.default'], account: accounts[0] };
-        await msalInstance.acquireTokenSilent(bapRequest);
+        // Try to silently acquire BAP token
+        const bapRequest = { scopes: ['https://api.bap.microsoft.com/.default'], account };
+        try {
+            await msalInstance.acquireTokenSilent(bapRequest);
+        } catch (e) {
+            // Need consent — redirect for it
+            msalInstance.acquireTokenRedirect(bapRequest);
+            return; // Page will reload
+        }
 
-        showLoading('Reconnecting...', 'Resolving environment');
+        showLoading('Authenticating...', 'Resolving environment');
 
         // Normalize org URL
         let normalizedOrgUrl = orgUrlValue;
@@ -137,7 +159,7 @@ async function tryAutoLogin() {
 
         currentOrgUrl = normalizedOrgUrl;
 
-        showLoading('Reconnecting...', 'Loading environment details');
+        showLoading('Authenticating...', 'Loading environment details');
         await getEnvironmentName();
 
         hideLoading();
@@ -147,7 +169,7 @@ async function tryAutoLogin() {
 
         await loadApplications();
 
-        console.log('Auto-login successful for', accounts[0].username);
+        console.log('Auth successful for', account.username);
     } catch (e) {
         // Silent acquisition failed — token expired or revoked, user must log in again
         console.log('Auto-login failed, user will log in manually:', e.message);
@@ -195,65 +217,23 @@ async function handleAuthentication(event) {
         msalInstance = new msal.PublicClientApplication(msalConfig);
         await msalInstance.initialize();
         
-        // Sign in (basic OpenID scopes only)
-        showLoading('Authenticating...', 'Signing in to Microsoft');
-        const accounts = msalInstance.getAllAccounts();
-        let account;
+        // Redirect to Microsoft login — the page will reload and handleRedirectResponse() will continue
+        showLoading('Authenticating...', 'Redirecting to Microsoft sign-in...');
         
-        if (accounts.length > 0) {
-            account = accounts[0];
-        } else {
-            const loginResult = await msalInstance.loginPopup({
-                scopes: ['openid', 'profile']
-            });
-            account = loginResult.account;
-        }
+        // Save the pending auth state so we know to continue after redirect
+        localStorage.setItem('d365_app_updater_pending_auth', 'true');
         
-        // Acquire Power Platform API token (popup fallback for consent)
-        showLoading('Authenticating...', 'Getting Power Platform API access');
-        const ppRequest = { scopes: ['https://api.powerplatform.com/.default'], account };
-        let ppResult;
-        try {
-            ppResult = await msalInstance.acquireTokenSilent(ppRequest);
-        } catch (e) {
-            ppResult = await msalInstance.acquireTokenPopup(ppRequest);
-        }
-        ppToken = ppResult.accessToken;
+        await msalInstance.loginRedirect({
+            scopes: [
+                'openid',
+                'profile',
+                'https://api.powerplatform.com/.default',
+                'https://api.bap.microsoft.com/.default'
+            ]
+        });
         
-        console.log('Power Platform API token acquired');
-        
-        // Acquire BAP token (popup fallback for consent)
-        showLoading('Authenticating...', 'Getting BAP API access');
-        const bapRequest = { scopes: ['https://api.bap.microsoft.com/.default'], account };
-        try {
-            await msalInstance.acquireTokenSilent(bapRequest);
-        } catch (e) {
-            await msalInstance.acquireTokenPopup(bapRequest);
-        }
-        
-        console.log('BAP API token acquired');
-        
-        // Resolve Organization URL to Environment ID via BAP API
-        showLoading('Authenticating...', 'Resolving Organization URL to Environment...');
-        environmentId = await resolveOrgUrlToEnvironmentId(orgUrlValue);
-        
-        if (!environmentId) {
-            throw new Error('Could not find a Power Platform environment matching URL: ' + orgUrlValue + '. Make sure you have admin access to the environment.');
-        }
-        
-        console.log('Resolved Org URL', orgUrlValue, '→ Environment ID:', environmentId);
-        currentOrgUrl = orgUrlValue;
-        
-        // Get environment name from BAP API (optional, just for display)
-        showLoading('Loading...', 'Getting environment details');
-        await getEnvironmentName();
-        
-        hideLoading();
-        
-        document.getElementById('authSection').classList.add('hidden');
-        document.getElementById('appsSection').classList.remove('hidden');
-        
-        await loadApplications();
+        // Execution stops here — browser navigates to Microsoft login
+        return;
         
     } catch (error) {
         hideLoading();
@@ -496,13 +476,10 @@ async function getBAPToken() {
         const result = await msalInstance.acquireTokenSilent(bapRequest);
         return result.accessToken;
     } catch (e) {
-        // Fallback: try popup for consent (may be blocked if not user-initiated)
-        try {
-            const result = await msalInstance.acquireTokenPopup(bapRequest);
-            return result.accessToken;
-        } catch (popupError) {
-            throw new Error('BAP API access denied. Please re-run the Setup Wizard to grant admin consent, or allow popups for this site.');
-        }
+        // Silent failed — redirect for consent
+        msalInstance.acquireTokenRedirect(bapRequest);
+        // Page will reload, throw to stop current execution
+        throw new Error('Redirecting for BAP API consent...');
     }
 }
 
@@ -1534,7 +1511,7 @@ function handleLogout() {
             const accounts = msalInstance.getAllAccounts();
             if (accounts.length > 0) {
                 // Clear MSAL cache so auto-login won't fire again
-                msalInstance.logoutPopup({ account: accounts[0] }).catch(() => {});
+                msalInstance.logoutRedirect({ account: accounts[0] }).catch(() => {});
             } else {
                 // No accounts but clear cache anyway
                 msalInstance.clearCache().catch(() => {});
