@@ -491,6 +491,17 @@
         }
 
         function initializeMSAL() {
+            // Clear ALL stale MSAL state from sessionStorage before starting fresh
+            // This prevents "interaction_in_progress" errors from previous failed attempts
+            const keysToRemove = [];
+            for (let i = 0; i < sessionStorage.length; i++) {
+                const key = sessionStorage.key(i);
+                if (key && key.startsWith('msal.')) {
+                    keysToRemove.push(key);
+                }
+            }
+            keysToRemove.forEach(k => sessionStorage.removeItem(k));
+
             // Use the ROOT directory as redirect URI (already registered in Azure AD)
             const pathDir = window.location.pathname.substring(0, window.location.pathname.lastIndexOf('/') + 1);
             const msalConfig = {
@@ -513,8 +524,6 @@
         async function signInAdmin() {
             try {
                 await msalInstance.initialize();
-                // Clear any stale interaction state from previous redirect attempts
-                await msalInstance.handleRedirectPromise();
 
                 document.getElementById('signInHint').style.display = 'block';
                 document.getElementById('progressText').textContent = 'Redirecting to Microsoft sign-in...';
