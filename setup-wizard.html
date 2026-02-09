@@ -169,44 +169,89 @@
             <div class="step-indicator">
                 <div class="step active" id="stepInd1">
                     <div class="step-circle">1</div>
-                    <div class="step-label">Sign In</div>
+                    <div class="step-label">Create App</div>
                 </div>
                 <div class="step" id="stepInd2">
                     <div class="step-circle">2</div>
-                    <div class="step-label">Create App</div>
+                    <div class="step-label">Sign In</div>
                 </div>
                 <div class="step" id="stepInd3">
                     <div class="step-circle">3</div>
+                    <div class="step-label">Configure</div>
+                </div>
+                <div class="step" id="stepInd4">
+                    <div class="step-circle">4</div>
                     <div class="step-label">Complete</div>
                 </div>
             </div>
 
-            <!-- Step 1: Sign In -->
+            <!-- Step 1: Create Basic App -->
             <div class="step-content active" id="step1">
-                <h3 class="mb-3">Welcome to the Setup Wizard!</h3>
-                <p class="text-muted mb-4">This wizard will automatically create and configure your Azure AD app registration. You'll need:</p>
+                <h3 class="mb-3">Step 1: Create App Registration</h3>
+                <p class="text-muted mb-3">First, create a basic app registration in Azure Portal. This takes 30 seconds:</p>
                 
-                <ul style="list-style: none; padding-left: 0;">
-                    <li class="mb-2"><i class="fas fa-check-circle text-success me-2"></i><strong>Global Administrator</strong> or <strong>Application Administrator</strong> role</li>
-                    <li class="mb-2"><i class="fas fa-check-circle text-success me-2"></i>A Microsoft 365 account with Azure AD access</li>
-                    <li class="mb-2"><i class="fas fa-check-circle text-success me-2"></i>~60 seconds of your time</li>
-                </ul>
+                <div class="alert alert-info">
+                    <strong><i class="fas fa-link me-2"></i>Quick Link:</strong>
+                    <div class="mt-2">
+                        <a href="https://portal.azure.com/#view/Microsoft_AAD_RegisteredApps/CreateApplicationBlade/quickStartType~/null/isMSAApp~/false" target="_blank" class="btn btn-sm btn-primary">
+                            <i class="fas fa-external-link-alt me-1"></i>Open Azure Portal (Create App)
+                        </a>
+                    </div>
+                </div>
 
-                <div class="info-box mt-4">
-                    <i class="fas fa-info-circle"></i>
-                    <strong>What will be created:</strong>
+                <ol class="mb-4">
+                    <li class="mb-3">
+                        <strong>Name:</strong> Enter <code>D365 App Updater</code>
+                    </li>
+                    <li class="mb-3">
+                        <strong>Supported account types:</strong> Keep default (Single tenant)
+                    </li>
+                    <li class="mb-3">
+                        <strong>Redirect URI:</strong>
+                        <div class="input-group mt-2">
+                            <span class="input-group-text">Platform</span>
+                            <select class="form-select" disabled>
+                                <option>Single-page application (SPA)</option>
+                            </select>
+                        </div>
+                        <div class="input-group mt-2">
+                            <input type="text" class="form-control" id="redirectUriDisplay" value="https://moliveirapinto.github.io/d365-app-updater/" readonly>
+                            <button class="btn btn-outline-secondary" onclick="copyRedirectUri()">
+                                <i class="fas fa-copy"></i>
+                            </button>
+                        </div>
+                        <small class="text-muted">Copy this URL and paste it in the Redirect URI field</small>
+                    </li>
+                    <li class="mb-3">
+                        Click <strong>"Register"</strong>
+                    </li>
+                    <li class="mb-3">
+                        <strong>Copy your Client ID</strong> from the Overview page
+                    </li>
+                </ol>
+
+                <div class="mb-3">
+                    <label for="userClientId" class="form-label"><strong>Enter Your Client ID:</strong></label>
+                    <input type="text" class="form-control" id="userClientId" placeholder="00000000-0000-0000-0000-000000000000">
+                    <div class="form-text">Paste the Application (client) ID from the Overview page</div>
+                </div>
+
+                <div class="info-box mt-3">
+                    <i class="fas fa-magic"></i>
+                    <strong>What the wizard will do next:</strong>
                     <ul class="permission-list mt-2 mb-0">
-                        <li><i class="fas fa-check"></i>Azure AD App Registration</li>
-                        <li><i class="fas fa-check"></i>Power Platform API permissions</li>
-                        <li><i class="fas fa-check"></i>Dynamics CRM permissions</li>
-                        <li><i class="fas fa-check"></i>Admin consent grants</li>
-                        <li><i class="fas fa-check"></i>Redirect URIs configured</li>
+                        <li><i class="fas fa-check"></i>Add Power Platform API permissions</li>
+                        <li><i class="fas fa-check"></i>Add Dynamics CRM permissions</li>
+                        <li><i class="fas fa-check"></i>Add Microsoft Graph permissions</li>
+                        <li><i class="fas fa-check"></i>Add BAP API permissions</li>
+                        <li><i class="fas fa-check"></i>Add PowerApps Service permissions</li>
+                        <li><i class="fas fa-check"></i>Grant admin consent for all</li>
                     </ul>
                 </div>
 
-                <div class="d-grid gap-2">
-                    <button class="btn btn-primary btn-lg" onclick="signInAdmin()">
-                        <i class="fas fa-user-shield me-2"></i>Sign In with Admin Account
+                <div class="d-grid gap-2 mt-4">
+                    <button class="btn btn-primary btn-lg" onclick="validateAndProceed()">
+                        <i class="fas fa-arrow-right me-2"></i>Continue to Automated Setup
                     </button>
                     <a href="index.html" class="btn btn-secondary">
                         <i class="fas fa-arrow-left me-2"></i>Back to App
@@ -219,9 +264,34 @@
                 </div>
             </div>
 
-            <!-- Step 2: Creating App -->
+            <!-- Step 2: Adding Permissions -->
             <div class="step-content" id="step2">
-                <h3 class="mb-3">Creating Your App Registration...</h3>
+                <h3 class="mb-3">Signing In...</h3>
+                
+                <div class="loading-spinner show">
+                    <div class="spinner-border" role="status">
+                        <span class="visually-hidden">Loading...</span>
+                    </div>
+                    <p class="mt-3 text-muted" id="progressText">Please sign in when prompted...</p>
+                </div>
+
+                <div class="alert alert-info" style="display: none;" id="signInHint">
+                    <i class="fas fa-info-circle me-2"></i>
+                    A popup window will open for you to sign in. Make sure popups are enabled.
+                </div>
+
+                <div class="error-box" id="error2">
+                    <i class="fas fa-exclamation-triangle"></i>
+                    <span id="error2Text"></span>
+                    <div class="mt-3">
+                        <button class="btn btn-sm btn-secondary" onclick="resetWizard()">Start Over</button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Step 3: Configuring Permissions -->
+            <div class="step-content" id="step3">
+                <h3 class="mb-3">Configuring Permissions...</h3>
                 
                 <div class="loading-spinner show">
                     <div class="spinner-border" role="status">
@@ -248,14 +318,50 @@
                 </div>
             </div>
 
-            <!-- Step 3: Complete -->
+            <!-- Step 3: Configuring Permissions -->
             <div class="step-content" id="step3">
+                <h3 class="mb-3">Configuring Permissions...</h3>
+                
+                <div id="creationProgress">
+                    <ul class="list-unstyled">
+                        <li class="mb-2" id="prog1"><i class="fas fa-circle text-muted me-2"></i>Adding Power Platform API...</li>
+                        <li class="mb-2" id="prog2"><i class="fas fa-circle text-muted me-2"></i>Adding Dynamics CRM...</li>
+                        <li class="mb-2" id="prog3"><i class="fas fa-circle text-muted me-2"></i>Adding Microsoft Graph...</li>
+                        <li class="mb-2" id="prog4"><i class="fas fa-circle text-muted me-2"></i>Adding BAP API...</li>
+                        <li class="mb-2" id="prog5"><i class="fas fa-circle text-muted me-2"></i>Adding PowerApps Service...</li>
+                        <li class="mb-2" id="prog6"><i class="fas fa-circle text-muted me-2"></i>Granting admin consent...</li>
+                    </ul>
+                </div>
+
+                <div class="error-box" id="error3">
+                    <i class="fas fa-exclamation-triangle"></i>
+                    <span id="error3Text"></span>
+                    <div class="mt-3">
+                        <button class="btn btn-sm btn-secondary" onclick="resetWizard()">Start Over</button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Step 4: Complete -->
+            <div class="step-content" id="step4">
                 <div class="success-box">
                     <i class="fas fa-check-circle"></i>
                     <h3>Setup Complete!</h3>
-                    <p class="text-muted mb-3">Your app registration is ready to use.</p>
+                    <p class="text-muted mb-3">Your app registration is fully configured with all required permissions.</p>
                     
-                    <div class="alert alert-info text-start">
+                    <div class="alert alert-success text-start">
+                        <strong><i class="fas fa-check-circle me-2"></i>All Permissions Added:</strong>
+                        <ul class="mt-2 mb-0">
+                            <li>✅ Power Platform API</li>
+                            <li>✅ Dynamics CRM</li>
+                            <li>✅ Microsoft Graph</li>
+                            <li>✅ BAP/Environment Service</li>
+                            <li>✅ PowerApps Service</li>
+                            <li>✅ Admin Consent Granted</li>
+                        </ul>
+                    </div>
+
+                    <div class="alert alert-info text-start mt-3">
                         <strong><i class="fas fa-key me-2"></i>Your Client ID:</strong>
                         <div class="code-box mt-2" id="clientIdDisplay">Loading...</div>
                         <button class="btn btn-sm btn-outline-primary" onclick="copyClientId()">
@@ -265,10 +371,10 @@
 
                     <h5 class="mt-4 mb-3">Next Steps:</h5>
                     <ol class="text-start">
-                        <li class="mb-2">Copy your Client ID above</li>
+                        <li class="mb-2">Your Client ID is already saved above</li>
                         <li class="mb-2">Go to the <a href="index.html">D365 App Updater</a></li>
-                        <li class="mb-2">Enter your Client ID and sign in</li>
-                        <li>Start updating apps!</li>
+                        <li class="mb-2">Enter your Client ID and Tenant ID</li>
+                        <li>Sign in and start updating apps!</li>
                     </ol>
 
                     <div class="d-grid gap-2 mt-4">
@@ -276,7 +382,7 @@
                             <i class="fas fa-arrow-right me-2"></i>Open D365 App Updater
                         </a>
                         <button class="btn btn-secondary" onclick="resetWizard()">
-                            <i class="fas fa-redo me-2"></i>Create Another App
+                            <i class="fas fa-redo me-2"></i>Configure Another App
                         </button>
                     </div>
                 </div>
@@ -285,36 +391,68 @@
     </div>
 
     <script>
-        // MSAL Configuration for admin setup
-        const msalConfig = {
-            auth: {
-                clientId: '00000003-0000-0000-c000-000000000000', // Microsoft Graph (well-known client ID)
-                authority: 'https://login.microsoftonline.com/organizations',
-                redirectUri: window.location.origin + window.location.pathname
-            },
-            cache: {
-                cacheLocation: 'sessionStorage',
-                storeAuthStateInCookie: false
-            }
-        };
-
-        const msalInstance = new msal.PublicClientApplication(msalConfig);
+        let msalInstance = null;
         let adminAccessToken = null;
-        let createdAppId = null;
-        let createdClientId = null;
+        let userProvidedClientId = null;
 
         // API Resource IDs
         const apiResources = {
-            powerPlatform: '8578e004-a5c6-46e7-913e-12f58912df43',
-            dynamicsCrm: '00000007-0000-0000-c000-000000000000',
-            msGraph: '00000003-0000-0000-c000-000000000000',
-            bap: '475226c6-020e-4fb2-8a90-7a972cbfc1d4',
-            powerApps: '8109c6e9-c0b9-4c9a-a8b4-0e2a11d7a2a9'
+            powerPlatform: { id: '8578e004-a5c6-46e7-913e-12f58912df43', scope: '9f7795e2-ce4f-42d1-b8c2-bc6c8af81d8f', name: 'Power Platform API' },
+            dynamicsCrm: { id: '00000007-0000-0000-c000-000000000000', scope: '78ce3f0f-a1ce-49c2-8cde-64b5c0896db4', name: 'Dynamics CRM' },
+            msGraph: { id: '00000003-0000-0000-c000-000000000000', scope: 'e1fe6dd8-ba31-4d61-89e7-88639da4683d', name: 'Microsoft Graph' },
+            bap: { id: '475226c6-020e-4fb2-8a90-7a972cbfc1d4', scope: '47bdd03f-c0f9-4f02-8e03-8f58c47c2c3d', name: 'BAP API' },
+            powerApps: { id: '8109c6e9-c0b9-4c9a-a8b4-0e2a11d7a2a9', scope: '2f67e4e1-3e7f-4b3e-a5ed-1e6cb0a0b4c1', name: 'PowerApps Service' }
         };
+
+        function copyRedirectUri() {
+            const text = document.getElementById('redirectUriDisplay').value;
+            navigator.clipboard.writeText(text).then(() => {
+                alert('Redirect URI copied to clipboard!');
+            });
+        }
+
+        function validateAndProceed() {
+            const clientId = document.getElementById('userClientId').value.trim();
+            if (!clientId) {
+                showError(1, 'Please enter your Client ID');
+                return;
+            }
+
+            // Basic UUID format validation
+            const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+            if (!uuidRegex.test(clientId)) {
+                showError(1, 'Invalid Client ID format. It should look like: 00000000-0000-0000-0000-000000000000');
+                return;
+            }
+
+            userProvidedClientId = clientId;
+            showError(1, null);
+            initializeMSAL();
+        }
+
+        function initializeMSAL() {
+            const msalConfig = {
+                auth: {
+                    clientId: userProvidedClientId,
+                    authority: 'https://login.microsoftonline.com/organizations',
+                    redirectUri: 'https://moliveirapinto.github.io/d365-app-updater/setup-wizard.html'
+                },
+                cache: {
+                    cacheLocation: 'sessionStorage',
+                    storeAuthStateInCookie: false
+                }
+            };
+
+            msalInstance = new msal.PublicClientApplication(msalConfig);
+            moveToStep(2);
+            signInAdmin();
+        }
 
         async function signInAdmin() {
             try {
-                showError(1, null);
+                document.getElementById('signInHint').style.display = 'block';
+                document.getElementById('progressText').textContent = 'Please sign in when prompted...';
+                
                 const loginRequest = {
                     scopes: ['Application.ReadWrite.All', 'Directory.AccessAsUser.All'],
                     prompt: 'select_account'
@@ -323,102 +461,127 @@
                 const response = await msalInstance.loginPopup(loginRequest);
                 adminAccessToken = response.accessToken;
                 
-                moveToStep(2);
-                await createAppRegistration();
+                moveToStep(3);
+                await addPermissions();
             } catch (error) {
                 console.error('Login error:', error);
-                showError(1, 'Failed to sign in. Make sure you have Application Administrator or Global Admin role. Error: ' + error.message);
+                showError(2, 'Failed to sign in. Make sure you have Application Administrator or Global Admin role. Error: ' + error.message);
             }
         }
 
-        async function createAppRegistration() {
+        async function addPermissions() {
             try {
-                document.getElementById('creationProgress').style.display = 'block';
-                document.querySelector('.loading-spinner').style.display = 'none';
+                showError(3, null);
+                
+                // Get the app object ID
+                const appsResponse = await fetch(`https://graph.microsoft.com/v1.0/applications?$filter=appId eq '${userProvidedClientId}'`, {
+                    headers: { 'Authorization': `Bearer ${adminAccessToken}` }
+                });
+                
+                if (!appsResponse.ok) throw new Error('Failed to find app registration');
+                
+                const apps = await appsResponse.json();
+                if (!apps.value || apps.value.length === 0) {
+                    throw new Error('App not found. Make sure the Client ID is correct.');
+                }
+                
+                const appObjectId = apps.value[0].id;
+                let currentPermissions = apps.value[0].requiredResourceAccess || [];
 
-                // Step 1: Create app registration
-                updateProgress(1, 'running');
-                const appData = {
-                    displayName: 'D365 Power Platform App Updater',
-                    signInAudience: 'AzureADMyOrg',
-                    web: {
-                        redirectUris: ['https://moliveirapinto.github.io/d365-app-updater/'],
-                        implicitGrantSettings: {
-                            enableAccessTokenIssuance: true,
-                            enableIdTokenIssuance: true
-                        }
-                    },
-                    spa: {
-                        redirectUris: ['https://moliveirapinto.github.io/d365-app-updater/']
-                    },
-                    requiredResourceAccess: [
-                        {
-                            resourceAppId: apiResources.powerPlatform,
-                            resourceAccess: [{ id: '9f7795e2-ce4f-42d1-b8c2-bc6c8af81d8f', type: 'Scope' }]
-                        },
-                        {
-                            resourceAppId: apiResources.dynamicsCrm,
-                            resourceAccess: [{ id: '78ce3f0f-a1ce-49c2-8cde-64b5c0896db4', type: 'Scope' }]
-                        },
-                        {
-                            resourceAppId: apiResources.msGraph,
-                            resourceAccess: [{ id: 'e1fe6dd8-ba31-4d61-89e7-88639da4683d', type: 'Scope' }]
-                        }
-                    ]
-                };
+                // Add each permission
+                let progressNum = 1;
+                for (const [key, resource] of Object.entries(apiResources)) {
+                    updateProgress(progressNum, 'running');
+                    
+                    // Check if permission already exists
+                    let resourceAccess = currentPermissions.find(r => r.resourceAppId === resource.id);
+                    if (!resourceAccess) {
+                        resourceAccess = {
+                            resourceAppId: resource.id,
+                            resourceAccess: []
+                        };
+                        currentPermissions.push(resourceAccess);
+                    }
+                    
+                    // Add scope if not exists
+                    const scopeExists = resourceAccess.resourceAccess.some(r => r.id === resource.scope);
+                    if (!scopeExists) {
+                        resourceAccess.resourceAccess.push({
+                            id: resource.scope,
+                            type: 'Scope'
+                        });
+                    }
+                    
+                    updateProgress(progressNum, 'complete');
+                    progressNum++;
+                    await new Promise(r => setTimeout(r, 300));
+                }
 
-                const createResponse = await fetch('https://graph.microsoft.com/v1.0/applications', {
-                    method: 'POST',
+                // Update the app with all permissions at once
+                const updateResponse = await fetch(`https://graph.microsoft.com/v1.0/applications/${appObjectId}`, {
+                    method: 'PATCH',
                     headers: {
                         'Authorization': `Bearer ${adminAccessToken}`,
                         'Content-Type': 'application/json'
                     },
-                    body: JSON.stringify(appData)
+                    body: JSON.stringify({
+                        requiredResourceAccess: currentPermissions
+                    })
                 });
 
-                if (!createResponse.ok) {
-                    const error = await createResponse.text();
-                    throw new Error('Failed to create app: ' + error);
+                if (!updateResponse.ok) {
+                    const error = await updateResponse.text();
+                    throw new Error('Failed to add permissions: ' + error);
                 }
 
-                const app = await createResponse.json();
-                createdAppId = app.id;
-                createdClientId = app.appId;
-                updateProgress(1, 'complete');
-
-                // Step 2: Already added during creation
-                updateProgress(2, 'complete');
-
-                // Step 3: Configure authentication (already done in creation)
-                updateProgress(3, 'complete');
-
-                // Step 4: Grant admin consent
-                updateProgress(4, 'running');
-                await grantAdminConsent();
-                updateProgress(4, 'complete');
+                // Grant admin consent
+                updateProgress(6, 'running');
+                await grantAdminConsent(appObjectId);
+                updateProgress(6, 'complete');
 
                 // Success!
                 await new Promise(r => setTimeout(r, 1000));
-                moveToStep(3);
-                document.getElementById('clientIdDisplay').textContent = createdClientId;
+                moveToStep(4);
+                document.getElementById('clientIdDisplay').textContent = userProvidedClientId;
 
             } catch (error) {
-                console.error('Creation error:', error);
-                showError(2, 'Failed to create app registration: ' + error.message + '. You may need to use the manual setup instead.');
+                console.error('Permission add error:', error);
+                showError(3, 'Failed to add permissions: ' + error.message + '. You may need to add them manually in Azure Portal.');
             }
         }
 
-        async function grantAdminConsent() {
-            // Grant consent using Microsoft Graph
+        async function grantAdminConsent(appObjectId) {
             try {
-                const servicePrincipals = await fetch(`https://graph.microsoft.com/v1.0/servicePrincipals?$filter=appId eq '${createdClientId}'`, {
+                // Create service principal if it doesn't exist
+                const spCheckResponse = await fetch(`https://graph.microsoft.com/v1.0/servicePrincipals?$filter=appId eq '${userProvidedClientId}'`, {
                     headers: { 'Authorization': `Bearer ${adminAccessToken}` }
-                }).then(r => r.json());
-
-                if (servicePrincipals.value && servicePrincipals.value.length > 0) {
-                    const spId = servicePrincipals.value[0].id;
+                });
+                
+                const spCheck = await spCheckResponse.json();
+                let spId;
+                
+                if (!spCheck.value || spCheck.value.length === 0) {
+                    // Create service principal
+                    const createSpResponse = await fetch('https://graph.microsoft.com/v1.0/servicePrincipals', {
+                        method: 'POST',
+                        headers: {
+                            'Authorization': `Bearer ${adminAccessToken}`,
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify({ appId: userProvidedClientId })
+                    });
                     
-                    for (const resourceId of Object.values(apiResources)) {
+                    if (createSpResponse.ok) {
+                        const sp = await createSpResponse.json();
+                        spId = sp.id;
+                    }
+                } else {
+                    spId = spCheck.value[0].id;
+                }
+
+                // Grant consents (best effort - some may fail but that's okay)
+                if (spId) {
+                    for (const resource of Object.values(apiResources)) {
                         try {
                             await fetch('https://graph.microsoft.com/v1.0/oauth2PermissionGrants', {
                                 method: 'POST',
@@ -429,12 +592,13 @@
                                 body: JSON.stringify({
                                     clientId: spId,
                                     consentType: 'AllPrincipals',
-                                    resourceId: resourceId,
-                                    scope: 'user_impersonation User.Read'
+                                    principalId: null,
+                                    resourceId: resource.id,
+                                    scope: 'user_impersonation User.Read User'
                                 })
                             });
                         } catch (e) {
-                            console.warn('Could not grant for resource:', resourceId, e);
+                            console.warn('Consent grant attempt for', resource.name, '- may need manual consent');
                         }
                     }
                 }
@@ -487,17 +651,21 @@
 
         function resetWizard() {
             adminAccessToken = null;
-            createdAppId = null;
-            createdClientId = null;
+            userProvidedClientId = null;
+            msalInstance = null;
+            document.getElementById('userClientId').value = '';
             showError(1, null);
             showError(2, null);
+            showError(3, null);
             moveToStep(1);
         }
 
-        // Handle redirect after popup
-        msalInstance.handleRedirectPromise().catch(err => {
-            console.error('Redirect error:', err);
-        });
+        // Handle redirect after popup (if needed)
+        if (msalInstance) {
+            msalInstance.handleRedirectPromise().catch(err => {
+                console.error('Redirect error:', err);
+            });
+        }
     </script>
 </body>
 </html>
