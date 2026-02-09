@@ -10,45 +10,67 @@
     <script src="https://alcdn.msauth.net/browser/2.32.1/js/msal-browser.min.js"></script>
     <style>
         * { font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
-        body { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); min-height: 100vh; padding: 2rem 0; }
+        body { background: #f5f6f8; min-height: 100vh; padding: 0; }
         .top-credit {
-            background: rgba(0,0,0,0.3);
-            color: rgba(255,255,255,0.9);
+            background: linear-gradient(90deg, #0078d4 0%, #005a9e 100%);
+            color: rgba(255,255,255,0.85);
             text-align: center;
             padding: 0.35rem 1rem;
             font-size: 0.72rem;
             letter-spacing: 0.02em;
-            position: fixed;
-            top: 0;
-            left: 0;
-            right: 0;
-            z-index: 1000;
         }
         .top-credit strong { color: #fff; font-weight: 600; }
         .top-credit a { color: rgba(255,255,255,0.9); text-decoration: none; }
         .top-credit a:hover { color: #fff; text-decoration: underline; }
-        .wizard-container {
-            max-width: 700px;
-            margin: 3rem auto 2rem;
-            background: white;
-            border-radius: 16px;
-            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
-            overflow: hidden;
+        .wizard-page {
+            min-height: calc(100vh - 28px);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 2rem 1rem;
         }
-        .wizard-header {
-            background: linear-gradient(135deg, #0078d4 0%, #005a9e 100%);
-            color: white;
-            padding: 2rem;
+        .wizard-wrapper {
+            width: 100%;
+            max-width: 540px;
+        }
+        .wizard-brand {
             text-align: center;
+            margin-bottom: 2rem;
         }
-        .wizard-header h1 { font-size: 1.75rem; font-weight: 700; margin: 0 0 0.5rem; }
-        .wizard-header p { margin: 0; opacity: 0.9; }
-        .wizard-body { padding: 2rem; }
+        .wizard-brand .brand-icon {
+            width: 56px;
+            height: 56px;
+            background: #0078d4;
+            border-radius: 12px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            margin-bottom: 1rem;
+        }
+        .wizard-brand h1 {
+            font-size: 1.5rem;
+            font-weight: 700;
+            color: #1a1a1a;
+            margin-bottom: 0.25rem;
+        }
+        .wizard-brand p {
+            color: #6b7280;
+            font-size: 0.9rem;
+            margin: 0;
+        }
+        .main-card {
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.08), 0 4px 24px rgba(0,0,0,0.04);
+            border: 1px solid #e5e7eb;
+            padding: 2rem;
+            margin-bottom: 2rem;
+        }
         .step-indicator {
             display: flex;
             justify-content: space-between;
             margin-bottom: 2rem;
-            padding: 0 1rem;
+            padding: 0 0.5rem;
         }
         .step {
             flex: 1;
@@ -88,7 +110,7 @@
             font-family: 'Font Awesome 6 Free';
             font-weight: 900;
         }
-        .step-label { font-size: 0.75rem; color: #6b7280; font-weight: 500; }
+        .step-label { font-size: 0.72rem; color: #6b7280; font-weight: 500; }
         .step.active .step-label { color: #0078d4; font-weight: 600; }
         .step.complete .step-label { color: #10b981; }
         .step-content { display: none; }
@@ -99,6 +121,7 @@
             border-radius: 8px;
             padding: 1rem;
             margin-bottom: 1.5rem;
+            font-size: 0.875rem;
         }
         .info-box i { color: #0078d4; margin-right: 0.5rem; }
         .success-box {
@@ -116,22 +139,35 @@
             padding: 1rem;
             margin-top: 1rem;
             display: none;
+            font-size: 0.85rem;
         }
         .error-box.show { display: block; }
         .error-box i { color: #ef4444; margin-right: 0.5rem; }
         .code-box {
             background: #1e293b;
             color: #e2e8f0;
-            padding: 1rem;
+            padding: 0.75rem 1rem;
             border-radius: 8px;
             font-family: 'Courier New', monospace;
-            font-size: 0.875rem;
-            margin: 1rem 0;
+            font-size: 0.85rem;
+            margin: 0.75rem 0;
             word-break: break-all;
         }
-        .btn-primary { background: #0078d4; border: none; padding: 0.65rem 1.5rem; font-weight: 600; }
-        .btn-primary:hover { background: #005a9e; }
-        .btn-secondary { background: #6b7280; border: none; }
+        .form-control {
+            border: 1px solid #d1d5db;
+            border-radius: 8px;
+            padding: 0.625rem 0.875rem;
+            font-size: 0.9rem;
+            transition: border-color 0.15s, box-shadow 0.15s;
+        }
+        .form-control:focus {
+            border-color: #0078d4;
+            box-shadow: 0 0 0 3px rgba(0, 120, 212, 0.12);
+        }
+        .form-text { font-size: 0.8rem; color: #9ca3af; margin-top: 0.375rem; }
+        .btn-primary { background: #0078d4; border: none; padding: 0.65rem 1.5rem; font-weight: 600; border-radius: 8px; }
+        .btn-primary:hover { background: #106ebe; }
+        .btn-secondary { background: #6b7280; border: none; border-radius: 8px; }
         .btn-secondary:hover { background: #4b5563; }
         .loading-spinner {
             display: none;
@@ -143,11 +179,12 @@
         .permission-list {
             list-style: none;
             padding: 0;
-            margin: 1rem 0;
+            margin: 0.75rem 0;
         }
         .permission-list li {
-            padding: 0.5rem 0;
+            padding: 0.4rem 0;
             border-bottom: 1px solid #f3f4f6;
+            font-size: 0.875rem;
         }
         .permission-list li:last-child { border-bottom: none; }
         .permission-list i { color: #10b981; margin-right: 0.5rem; }
@@ -158,13 +195,17 @@
         <span>Built by <strong>Mauricio Oliveira</strong> — Contact Center GBB &nbsp;|&nbsp; <a href="mailto:mauricio.oliveira@microsoft.com">mauricio.oliveira@microsoft.com</a></span>
     </div>
 
-    <div class="wizard-container">
-        <div class="wizard-header">
-            <h1><i class="fas fa-magic me-2"></i>Automated Setup Wizard</h1>
-            <p>Set up your Azure AD app registration in 60 seconds</p>
-        </div>
+    <div class="wizard-page">
+        <div class="wizard-wrapper">
+            <div class="wizard-brand">
+                <div class="brand-icon">
+                    <i class="fas fa-magic fa-lg" style="color: white;"></i>
+                </div>
+                <h1>Setup Wizard</h1>
+                <p>Set up your Azure AD app registration in 60 seconds</p>
+            </div>
 
-        <div class="wizard-body">
+            <div class="main-card">
             <!-- Step Indicator -->
             <div class="step-indicator">
                 <div class="step active" id="stepInd1">
@@ -387,8 +428,9 @@
                     </div>
                 </div>
             </div>
-        </div>
-    </div>
+            </div><!-- end main-card -->
+        </div><!-- end wizard-wrapper -->
+    </div><!-- end wizard-page -->
 
     <script>
         let msalInstance = null;
