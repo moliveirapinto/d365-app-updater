@@ -255,6 +255,10 @@
                             </button>
                         </div>
                         <small class="text-muted">Copy this URL and paste it in the Redirect URI field</small>
+                        <div class="mt-2">
+                            <img src="img/demo.jpeg" alt="Example configuration" class="img-thumbnail" style="max-width:180px; cursor:pointer; border-radius:8px; opacity:0.9; transition:opacity 0.15s;" onclick="document.getElementById('imgModal').style.display='flex'" onmouseover="this.style.opacity='1'" onmouseout="this.style.opacity='0.9'">
+                            <div class="text-muted mt-1" style="font-size:0.75rem;">Click to enlarge</div>
+                        </div>
                     </li>
                     <li class="mb-3">
                         Click <strong>"Register"</strong>
@@ -734,5 +738,10 @@
             });
         }
     </script>
+
+    <!-- Image Modal -->
+    <div id="imgModal" style="display:none; position:fixed; inset:0; z-index:9999; background:rgba(0,0,0,0.7); align-items:center; justify-content:center; cursor:pointer; backdrop-filter:blur(4px);" onclick="this.style.display='none'">
+        <img src="img/demo.jpeg" alt="Example configuration" style="max-width:90vw; max-height:90vh; border-radius:12px; box-shadow:0 8px 32px rgba(0,0,0,0.4);">
+    </div>
 </body>
 </html>
