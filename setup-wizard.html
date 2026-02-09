@@ -256,12 +256,16 @@
                             </select>
                         </div>
                         <div class="input-group mt-2">
-                            <input type="text" class="form-control" id="redirectUriDisplay" value="https://moliveirapinto.github.io/d365-app-updater/" readonly>
+                            <input type="text" class="form-control" id="redirectUriDisplay" value="" readonly>
                             <button class="btn btn-outline-secondary" onclick="copyRedirectUri()">
                                 <i class="fas fa-copy"></i>
                             </button>
                         </div>
                         <small class="text-muted">Copy this URL and paste it in the Redirect URI field</small>
+                        <script>
+                            // Set redirect URI dynamically to this page's URL
+                            document.getElementById('redirectUriDisplay').value = window.location.origin + window.location.pathname;
+                        </script>
                         <div class="mt-2">
                             <img src="img/demo.jpeg" alt="Example configuration" class="img-thumbnail" style="max-width:180px; cursor:pointer; border-radius:8px; opacity:0.9; transition:opacity 0.15s;" onclick="document.getElementById('imgModal').style.display='flex'" onmouseover="this.style.opacity='1'" onmouseout="this.style.opacity='0.9'">
                             <div class="text-muted mt-1" style="font-size:0.75rem;">Click to enlarge</div>
@@ -451,6 +455,7 @@
         document.addEventListener('DOMContentLoaded', async function() {
             wizardLog('Page loaded', { 
                 url: window.location.href,
+                hash: window.location.hash ? 'present (' + window.location.hash.length + ' chars)' : 'none',
                 hasWizardClientId: !!sessionStorage.getItem('wizard_clientId'),
                 hasWizardToken: !!sessionStorage.getItem('wizard_accessToken'),
                 hasWizardError: !!sessionStorage.getItem('wizard_error')
@@ -458,7 +463,111 @@
 
             const savedClientId = sessionStorage.getItem('wizard_clientId');
             
-            // Check for error from redirect processing (even if no savedClientId, error might exist)
+            // ═══════════════════════════════════════════════════════════════════════
+            // DIRECT REDIRECT HANDLING: Process MSAL redirect right here on this page
+            // ═══════════════════════════════════════════════════════════════════════
+            if (savedClientId && window.location.hash) {
+                wizardLog('Detected redirect with hash, processing MSAL response...');
+                
+                // Check for error in hash first
+                if (window.location.hash.includes('error')) {
+                    const hashParams = new URLSearchParams(window.location.hash.substring(1));
+                    const error = hashParams.get('error');
+                    const errorDesc = decodeURIComponent(hashParams.get('error_description') || 'Unknown error');
+                    wizardLog('Error in redirect hash', { error, errorDesc });
+                    
+                    sessionStorage.removeItem('wizard_clientId');
+                    history.replaceState(null, '', window.location.pathname);
+                    showError(2, 'Sign-in failed: ' + errorDesc);
+                    moveToStep(2);
+                    document.getElementById('userClientId').value = savedClientId;
+                    return;
+                }
+                
+                try {
+                    // Initialize MSAL with the saved client ID
+                    const wizardMsalConfig = {
+                        auth: {
+                            clientId: savedClientId,
+                            authority: 'https://login.microsoftonline.com/organizations',
+                            redirectUri: window.location.origin + window.location.pathname // setup-wizard.html
+                        },
+                        cache: { cacheLocation: 'sessionStorage', storeAuthStateInCookie: false }
+                    };
+                    
+                    const wizardMsal = new msal.PublicClientApplication(wizardMsalConfig);
+                    await wizardMsal.initialize();
+                    wizardLog('MSAL initialized for redirect handling');
+                    
+                    const response = await wizardMsal.handleRedirectPromise();
+                    wizardLog('handleRedirectPromise result', response ? { 
+                        hasToken: !!response.accessToken, 
+                        scopes: response.scopes,
+                        account: response.account?.username
+                    } : 'null');
+                    
+                    // Clean URL
+                    history.replaceState(null, '', window.location.pathname);
+                    
+                    if (response && response.accessToken) {
+                        wizardLog('Token acquired successfully!');
+                        userProvidedClientId = savedClientId;
+                        adminAccessToken = response.accessToken;
+                        document.getElementById('userClientId').value = savedClientId;
+                        sessionStorage.removeItem('wizard_clientId');
+                        
+                        moveToStep(3);
+                        await addPermissions();
+                        return;
+                    } else {
+                        // No token in response, try silent acquisition
+                        wizardLog('No token in redirect response, trying silent acquisition...');
+                        const accounts = wizardMsal.getAllAccounts();
+                        wizardLog('Accounts found', accounts.length);
+                        
+                        if (accounts.length > 0) {
+                            try {
+                                const silentResult = await wizardMsal.acquireTokenSilent({
+                                    scopes: ['https://graph.microsoft.com/Application.ReadWrite.All', 'https://graph.microsoft.com/DelegatedPermissionGrant.ReadWrite.All'],
+                                    account: accounts[0]
+                                });
+                                
+                                if (silentResult && silentResult.accessToken) {
+                                    wizardLog('Token acquired silently!');
+                                    userProvidedClientId = savedClientId;
+                                    adminAccessToken = silentResult.accessToken;
+                                    document.getElementById('userClientId').value = savedClientId;
+                                    sessionStorage.removeItem('wizard_clientId');
+                                    
+                                    moveToStep(3);
+                                    await addPermissions();
+                                    return;
+                                }
+                            } catch (silentErr) {
+                                wizardLog('Silent token acquisition failed', silentErr.message);
+                            }
+                        }
+                        
+                        // Still no token
+                        wizardLog('Failed to acquire token after redirect');
+                        sessionStorage.removeItem('wizard_clientId');
+                        showError(2, 'Failed to get access token. Please try signing in again.');
+                        moveToStep(2);
+                        document.getElementById('userClientId').value = savedClientId;
+                        return;
+                    }
+                } catch (err) {
+                    wizardLog('Error processing redirect', err.message);
+                    history.replaceState(null, '', window.location.pathname);
+                    sessionStorage.removeItem('wizard_clientId');
+                    showError(2, 'Sign-in failed: ' + err.message);
+                    moveToStep(2);
+                    document.getElementById('userClientId').value = savedClientId;
+                    return;
+                }
+            }
+            
+            // Check for error from previous attempt
             const wizardError = sessionStorage.getItem('wizard_error');
             if (wizardError) {
                 wizardLog('Error found in storage', wizardError);
@@ -540,19 +649,24 @@
             }
             keysToRemove.forEach(k => sessionStorage.removeItem(k));
 
-            // Use the ROOT directory as redirect URI (already registered in Azure AD)
-            const pathDir = window.location.pathname.substring(0, window.location.pathname.lastIndexOf('/') + 1);
+            // Use THIS PAGE (setup-wizard.html) as the redirect URI
+            // This avoids cross-page issues with sessionStorage
             const msalConfig = {
                 auth: {
                     clientId: userProvidedClientId,
                     authority: 'https://login.microsoftonline.com/organizations',
-                    redirectUri: window.location.origin + pathDir
+                    redirectUri: window.location.origin + window.location.pathname // setup-wizard.html
                 },
                 cache: {
                     cacheLocation: 'sessionStorage',
                     storeAuthStateInCookie: false
                 }
             };
+            
+            wizardLog('Initializing MSAL', { 
+                clientId: userProvidedClientId.substring(0, 8) + '...', 
+                redirectUri: msalConfig.auth.redirectUri 
+            });
 
             msalInstance = new msal.PublicClientApplication(msalConfig);
             moveToStep(2);
