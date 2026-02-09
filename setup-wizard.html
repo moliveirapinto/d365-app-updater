@@ -454,7 +454,7 @@
                 document.getElementById('progressText').textContent = 'Please sign in when prompted...';
                 
                 const loginRequest = {
-                    scopes: ['Application.ReadWrite.All', 'Directory.AccessAsUser.All'],
+                    scopes: ['Application.ReadWrite.All', 'DelegatedPermissionGrant.ReadWrite.All'],
                     prompt: 'select_account'
                 };
 
@@ -579,11 +579,25 @@
                     spId = spCheck.value[0].id;
                 }
 
-                // Grant consents (best effort - some may fail but that's okay)
+                // Grant consents - need to look up each resource's service principal object ID
                 if (spId) {
                     for (const resource of Object.values(apiResources)) {
                         try {
-                            await fetch('https://graph.microsoft.com/v1.0/oauth2PermissionGrants', {
+                            // Look up the service principal for this resource API
+                            const resourceSpResponse = await fetch(
+                                `https://graph.microsoft.com/v1.0/servicePrincipals?$filter=appId eq '${resource.id}'&$select=id`,
+                                { headers: { 'Authorization': `Bearer ${adminAccessToken}` } }
+                            );
+                            const resourceSpData = await resourceSpResponse.json();
+                            
+                            if (!resourceSpData.value || resourceSpData.value.length === 0) {
+                                console.warn('Service principal not found for', resource.name);
+                                continue;
+                            }
+                            
+                            const resourceSpId = resourceSpData.value[0].id;
+                            
+                            const grantResponse = await fetch('https://graph.microsoft.com/v1.0/oauth2PermissionGrants', {
                                 method: 'POST',
                                 headers: {
                                     'Authorization': `Bearer ${adminAccessToken}`,
@@ -593,12 +607,17 @@
                                     clientId: spId,
                                     consentType: 'AllPrincipals',
                                     principalId: null,
-                                    resourceId: resource.id,
+                                    resourceId: resourceSpId,
                                     scope: 'user_impersonation User.Read User'
                                 })
                             });
+                            
+                            if (!grantResponse.ok) {
+                                const errText = await grantResponse.text();
+                                console.warn('Consent grant for', resource.name, ':', errText);
+                            }
                         } catch (e) {
-                            console.warn('Consent grant attempt for', resource.name, '- may need manual consent');
+                            console.warn('Consent grant attempt for', resource.name, '- may need manual consent:', e);
                         }
                     }
                 }
