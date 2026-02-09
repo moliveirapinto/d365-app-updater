@@ -412,7 +412,32 @@ async function handleRedirectResponse() {
         sessionStorage.removeItem('d365_redirect_count');
         logError('=== AUTH FAILED ===', e.message);
         hideLoading();
-        showError('Authentication failed: ' + e.message);
+        
+        // Provide helpful error messages for common issues
+        let errorMessage = e.message;
+        if (e.message.includes('AADSTS650057') || e.message.includes('Invalid resource') || e.message.includes('not listed in the requested permissions')) {
+            errorMessage = `<strong>Missing API Permissions</strong><br><br>
+Your Azure AD app registration is missing required permissions.<br><br>
+<strong>To fix this:</strong><br>
+1. Go to <a href="https://portal.azure.com/#view/Microsoft_AAD_RegisteredApps/ApplicationsListBlade" target="_blank" rel="noopener">Azure Portal → App Registrations</a><br>
+2. Find and click on your app<br>
+3. Go to <strong>API permissions</strong> → <strong>Add a permission</strong><br>
+4. Add: <strong>Power Platform API</strong> → Delegated → <code>user_impersonation</code><br>
+5. Add: <strong>Dynamics CRM</strong> → Delegated → <code>user_impersonation</code><br>
+6. Click <strong>Grant admin consent</strong><br><br>
+<small style="color:#888">Error details: ${e.message.substring(0, 200)}...</small>`;
+        } else if (e.message.includes('AADSTS700016') || e.message.includes('not found in the directory')) {
+            errorMessage = `<strong>Application Not Found</strong><br><br>
+The Client ID does not exist in the specified tenant.<br>
+Please verify your Tenant ID and Client ID are correct.`;
+        } else if (e.message.includes('AADSTS50011') || e.message.includes('reply URL') || e.message.includes('redirect')) {
+            errorMessage = `<strong>Invalid Redirect URI</strong><br><br>
+The redirect URI is not configured in your app registration.<br><br>
+Add this URI to your app's redirect URIs:<br>
+<code>${window.location.origin + window.location.pathname.substring(0, window.location.pathname.lastIndexOf('/') + 1)}</code>`;
+        }
+        
+        showError(errorMessage);
         msalInstance = null;
         ppToken = null;
         environmentId = null;
