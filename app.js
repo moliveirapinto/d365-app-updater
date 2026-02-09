@@ -13,11 +13,13 @@ const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZ
 
 // MSAL Configuration
 function createMsalConfig(tenantId, clientId) {
+    // Compute redirect URI from current path (handles GitHub Pages subpaths like /d365-app-updater/)
+    const pathDir = window.location.pathname.substring(0, window.location.pathname.lastIndexOf('/') + 1);
     return {
         auth: {
             clientId: clientId,
             authority: `https://login.microsoftonline.com/${tenantId}`,
-            redirectUri: window.location.origin + '/',
+            redirectUri: window.location.origin + pathDir,
         },
         cache: {
             cacheLocation: 'localStorage',
