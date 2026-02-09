@@ -715,8 +715,12 @@
         }
 
         async function addPermissions() {
+            const skippedPermissions = [];
+            const addedPermissions = [];
+            
             try {
                 showError(3, null);
+                wizardLog('Starting permission addition...');
                 
                 // Get the app object ID
                 const appsResponse = await fetch(`https://graph.microsoft.com/v1.0/applications?$filter=appId eq '${userProvidedClientId}'`, {
@@ -731,34 +735,69 @@
                 }
                 
                 const appObjectId = apps.value[0].id;
+                wizardLog('Found app with Object ID: ' + appObjectId);
                 let currentPermissions = apps.value[0].requiredResourceAccess || [];
 
                 // Add each permission (dynamically look up scope IDs)
                 let progressNum = 1;
                 for (const [key, resource] of Object.entries(apiResources)) {
                     updateProgress(progressNum, 'running');
+                    wizardLog(`Processing: ${resource.name}...`);
                     
                     // Look up the service principal to find the correct scope ID
                     const spResponse = await fetch(
-                        `https://graph.microsoft.com/v1.0/servicePrincipals?$filter=appId eq '${resource.id}'&$select=id,oauth2PermissionScopes`,
+                        `https://graph.microsoft.com/v1.0/servicePrincipals?$filter=appId eq '${resource.id}'&$select=id,appId,displayName,oauth2PermissionScopes`,
                         { headers: { 'Authorization': `Bearer ${adminAccessToken}` } }
                     );
                     const spData = await spResponse.json();
+                    
                     if (!spData.value || spData.value.length === 0) {
-                        console.warn('Service principal not found for', resource.name, '- skipping');
-                        updateProgress(progressNum, 'complete');
+                        // Try to create the service principal (this enables the API in the tenant)
+                        wizardLog(`Service principal not found for ${resource.name}, attempting to create...`);
+                        try {
+                            const createSpResponse = await fetch('https://graph.microsoft.com/v1.0/servicePrincipals', {
+                                method: 'POST',
+                                headers: {
+                                    'Authorization': `Bearer ${adminAccessToken}`,
+                                    'Content-Type': 'application/json'
+                                },
+                                body: JSON.stringify({ appId: resource.id })
+                            });
+                            
+                            if (createSpResponse.ok) {
+                                const createdSp = await createSpResponse.json();
+                                wizardLog(`Created service principal for ${resource.name}`);
+                                spData.value = [createdSp];
+                            } else {
+                                const errText = await createSpResponse.text();
+                                wizardLog(`Could not create SP for ${resource.name}: ${errText}`);
+                                skippedPermissions.push(`${resource.name} (service principal not in tenant)`);
+                                updateProgress(progressNum, 'error');
+                                progressNum++;
+                                continue;
+                            }
+                        } catch (createErr) {
+                            wizardLog(`Failed to create SP for ${resource.name}: ${createErr.message}`);
+                            skippedPermissions.push(`${resource.name} (service principal not in tenant)`);
+                            updateProgress(progressNum, 'error');
+                            progressNum++;
+                            continue;
+                        }
+                    }
+                    
+                    const sp = spData.value[0];
+                    wizardLog(`Found SP: ${sp.displayName || resource.name}`);
+                    
+                    const scope = sp.oauth2PermissionScopes?.find(s => s.value === resource.scopeName);
+                    if (!scope) {
+                        wizardLog(`Scope '${resource.scopeName}' not found for ${resource.name}. Available: ${sp.oauth2PermissionScopes?.map(s => s.value).join(', ') || 'none'}`);
+                        skippedPermissions.push(`${resource.name} (scope '${resource.scopeName}' not found)`);
+                        updateProgress(progressNum, 'error');
                         progressNum++;
                         continue;
                     }
                     
-                    const sp = spData.value[0];
-                    const scope = sp.oauth2PermissionScopes.find(s => s.value === resource.scopeName);
-                    if (!scope) {
-                        console.warn('Scope', resource.scopeName, 'not found for', resource.name, '- skipping');
-                        updateProgress(progressNum, 'complete');
-                        progressNum++;
-                        continue;
-                    }
+                    wizardLog(`Found scope: ${scope.value} (ID: ${scope.id})`);
                     
                     // Check if permission already exists
                     let resourceAccess = currentPermissions.find(r => r.resourceAppId === resource.id);
@@ -777,6 +816,11 @@
                             id: scope.id,
                             type: 'Scope'
                         });
+                        addedPermissions.push(resource.name);
+                        wizardLog(`Added permission: ${resource.name}`);
+                    } else {
+                        wizardLog(`Permission already exists: ${resource.name}`);
+                        addedPermissions.push(`${resource.name} (already existed)`);
                     }
                     
                     updateProgress(progressNum, 'complete');
@@ -785,6 +829,9 @@
                 }
 
                 // Update the app with all permissions at once
+                wizardLog('Saving permissions to app registration...');
+                wizardLog('Permissions payload: ' + JSON.stringify(currentPermissions, null, 2));
+                
                 const updateResponse = await fetch(`https://graph.microsoft.com/v1.0/applications/${appObjectId}`, {
                     method: 'PATCH',
                     headers: {
@@ -798,27 +845,60 @@
 
                 if (!updateResponse.ok) {
                     const error = await updateResponse.text();
+                    wizardLog('Failed to save permissions: ' + error);
                     throw new Error('Failed to add permissions: ' + error);
                 }
+                
+                wizardLog('Permissions saved successfully!');
 
                 // Grant admin consent
                 updateProgress(5, 'running');
+                wizardLog('Granting admin consent...');
                 await grantAdminConsent(appObjectId);
                 updateProgress(5, 'complete');
+                wizardLog('Admin consent granted!');
+
+                // Show summary
+                if (skippedPermissions.length > 0) {
+                    const warningHtml = `
+                        <div class="alert alert-warning">
+                            <strong>Partial Success:</strong> Some permissions could not be added automatically:
+                            <ul class="mb-0 mt-2">
+                                ${skippedPermissions.map(p => `<li>${p}</li>`).join('')}
+                            </ul>
+                            <p class="mt-2 mb-0">You may need to add these manually in Azure Portal → App Registrations → API Permissions.</p>
+                        </div>
+                    `;
+                    showError(3, warningHtml);
+                }
 
                 // Success!
                 await new Promise(r => setTimeout(r, 1000));
                 moveToStep(4);
                 document.getElementById('clientIdDisplay').textContent = userProvidedClientId;
+                
+                // Show what was added
+                if (addedPermissions.length > 0) {
+                    wizardLog('Summary - Added permissions: ' + addedPermissions.join(', '));
+                }
+                if (skippedPermissions.length > 0) {
+                    wizardLog('Summary - Skipped: ' + skippedPermissions.join(', '));
+                }
 
             } catch (error) {
                 console.error('Permission add error:', error);
-                showError(3, 'Failed to add permissions: ' + error.message + '. You may need to add them manually in Azure Portal.');
+                wizardLog('ERROR: ' + error.message);
+                showError(3, `Failed to add permissions: ${error.message}. 
+                    <br><br><strong>Skipped:</strong> ${skippedPermissions.join(', ') || 'none'}
+                    <br><strong>Added:</strong> ${addedPermissions.join(', ') || 'none'}
+                    <br><br>You may need to add them manually in Azure Portal.`);
             }
         }
 
         async function grantAdminConsent(appObjectId) {
             try {
+                wizardLog('Starting admin consent process...');
+                
                 // Create service principal if it doesn't exist
                 const spCheckResponse = await fetch(`https://graph.microsoft.com/v1.0/servicePrincipals?$filter=appId eq '${userProvidedClientId}'`, {
                     headers: { 'Authorization': `Bearer ${adminAccessToken}` }
@@ -829,6 +909,7 @@
                 
                 if (!spCheck.value || spCheck.value.length === 0) {
                     // Create service principal
+                    wizardLog('Creating service principal for the app...');
                     const createSpResponse = await fetch('https://graph.microsoft.com/v1.0/servicePrincipals', {
                         method: 'POST',
                         headers: {
@@ -841,28 +922,39 @@
                     if (createSpResponse.ok) {
                         const sp = await createSpResponse.json();
                         spId = sp.id;
+                        wizardLog('Created service principal: ' + spId);
+                    } else {
+                        const errText = await createSpResponse.text();
+                        wizardLog('Failed to create service principal: ' + errText);
                     }
                 } else {
                     spId = spCheck.value[0].id;
+                    wizardLog('Found existing service principal: ' + spId);
                 }
 
                 // Grant consents - need to look up each resource's service principal object ID
                 if (spId) {
                     for (const resource of Object.values(apiResources)) {
                         try {
+                            wizardLog(`Granting consent for ${resource.name}...`);
+                            
                             // Look up the service principal for this resource API
                             const resourceSpResponse = await fetch(
-                                `https://graph.microsoft.com/v1.0/servicePrincipals?$filter=appId eq '${resource.id}'&$select=id`,
+                                `https://graph.microsoft.com/v1.0/servicePrincipals?$filter=appId eq '${resource.id}'&$select=id,displayName`,
                                 { headers: { 'Authorization': `Bearer ${adminAccessToken}` } }
                             );
                             const resourceSpData = await resourceSpResponse.json();
                             
                             if (!resourceSpData.value || resourceSpData.value.length === 0) {
-                                console.warn('Service principal not found for', resource.name);
+                                wizardLog(`Service principal not found for ${resource.name} - cannot grant consent`);
                                 continue;
                             }
                             
                             const resourceSpId = resourceSpData.value[0].id;
+                            wizardLog(`Found resource SP: ${resourceSpData.value[0].displayName} (${resourceSpId})`);
+                            
+                            // Use the scope specific to this API
+                            const scope = resource.scopeName;
                             
                             const grantResponse = await fetch('https://graph.microsoft.com/v1.0/oauth2PermissionGrants', {
                                 method: 'POST',
@@ -875,21 +967,30 @@
                                     consentType: 'AllPrincipals',
                                     principalId: null,
                                     resourceId: resourceSpId,
-                                    scope: 'user_impersonation User.Read User'
+                                    scope: scope
                                 })
                             });
                             
-                            if (!grantResponse.ok) {
+                            if (grantResponse.ok) {
+                                wizardLog(`Admin consent granted for ${resource.name}!`);
+                            } else {
                                 const errText = await grantResponse.text();
-                                console.warn('Consent grant for', resource.name, ':', errText);
+                                // Check if it's because consent already exists
+                                if (errText.includes('already exists')) {
+                                    wizardLog(`Consent already exists for ${resource.name}`);
+                                } else {
+                                    wizardLog(`Consent grant for ${resource.name}: ${errText}`);
+                                }
                             }
                         } catch (e) {
-                            console.warn('Consent grant attempt for', resource.name, '- may need manual consent:', e);
+                            wizardLog(`Consent attempt for ${resource.name} - may need manual consent: ${e.message}`);
                         }
                     }
+                } else {
+                    wizardLog('No service principal ID - cannot grant consents');
                 }
             } catch (error) {
-                console.warn('Admin consent may need to be granted manually:', error);
+                wizardLog('Admin consent may need to be granted manually: ' + error.message);
             }
         }
 
