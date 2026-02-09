@@ -189,21 +189,25 @@ async function handleAuthentication(event) {
         msalInstance = new msal.PublicClientApplication(msalConfig);
         await msalInstance.initialize();
         
-        // Get Power Platform API token
-        showLoading('Authenticating...', 'Getting Power Platform API access');
+        // Sign in with a single popup, consenting to both APIs at once
+        showLoading('Authenticating...', 'Signing in to Microsoft');
         const accounts = msalInstance.getAllAccounts();
-        const ppRequest = { scopes: ['https://api.powerplatform.com/.default'], account: accounts[0] };
+        let account;
         
-        let ppResult;
         if (accounts.length > 0) {
-            try {
-                ppResult = await msalInstance.acquireTokenSilent(ppRequest);
-            } catch (e) {
-                ppResult = await msalInstance.acquireTokenPopup(ppRequest);
-            }
+            account = accounts[0];
         } else {
-            ppResult = await msalInstance.acquireTokenPopup(ppRequest);
+            const loginResult = await msalInstance.loginPopup({
+                scopes: ['https://api.powerplatform.com/.default'],
+                extraScopesToConsent: ['https://api.bap.microsoft.com/.default']
+            });
+            account = loginResult.account;
         }
+        
+        // Get Power Platform API token (silent - consent already granted)
+        showLoading('Authenticating...', 'Getting Power Platform API access');
+        const ppRequest = { scopes: ['https://api.powerplatform.com/.default'], account };
+        const ppResult = await msalInstance.acquireTokenSilent(ppRequest);
         ppToken = ppResult.accessToken;
         
         console.log('Power Platform API token acquired');
@@ -471,8 +475,9 @@ async function getBAPToken() {
         const result = await msalInstance.acquireTokenSilent(bapRequest);
         return result.accessToken;
     } catch (e) {
-        const result = await msalInstance.acquireTokenPopup(bapRequest);
-        return result.accessToken;
+        // Consent may be missing — use redirect to avoid popup-blocked issues
+        await msalInstance.acquireTokenRedirect(bapRequest);
+        // Page will redirect, so this won't return
     }
 }
 
