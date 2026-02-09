@@ -112,15 +112,29 @@ $apiResources = @{
     "Power Platform API" = "8578e004-a5c6-46e7-913e-12f58912df43"
     "Dynamics CRM" = "00000007-0000-0000-c000-000000000000"
     "Microsoft Graph" = "00000003-0000-0000-c000-000000000000"
-    "BAP/Power Platform Environment Service" = "475226c6-020e-4fb2-8a90-7a972cbfc1d4"
+    "BAP API" = "0e0bf3cc-3078-4fd4-9ef3-cb6dc0245b10"
 }
 
-# Define all required permissions with their scope IDs
+# Helper: look up a delegated permission scope ID from a service principal
+function Get-ScopeId($ResourceAppId, $ScopeName) {
+    $spJson = az ad sp show --id $ResourceAppId 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        Write-Warning-Custom "Could not find service principal for $ResourceAppId"
+        return $null
+    }
+    $sp = $spJson | ConvertFrom-Json
+    $scope = $sp.oauth2PermissionScopes | Where-Object { $_.value -eq $ScopeName }
+    if ($scope) { return $scope.id }
+    return $null
+}
+
+# Dynamically resolve scope IDs
+Write-Host "`nResolving permission scope IDs..." -ForegroundColor $InfoColor
 $permissions = @(
-    @{API="Power Platform API"; ResourceId=$apiResources["Power Platform API"]; Permission="user_impersonation"; ScopeId="9f7795e2-ce4f-42d1-b8c2-bc6c8af81d8f"}
-    @{API="Dynamics CRM"; ResourceId=$apiResources["Dynamics CRM"]; Permission="user_impersonation"; ScopeId="78ce3f0f-a1ce-49c2-8cde-64b5c0896db4"}
-    @{API="Microsoft Graph"; ResourceId=$apiResources["Microsoft Graph"]; Permission="User.Read"; ScopeId="e1fe6dd8-ba31-4d61-89e7-88639da4683d"}
-    @{API="BAP/Power Platform Environment Service"; ResourceId=$apiResources["BAP/Power Platform Environment Service"]; Permission="user_impersonation"; ScopeId="47bdd03f-c0f9-4f02-8e03-8f58c47c2c3d"}
+    @{API="Power Platform API"; ResourceId=$apiResources["Power Platform API"]; Permission="user_impersonation"; ScopeId=(Get-ScopeId $apiResources["Power Platform API"] "user_impersonation")}
+    @{API="Dynamics CRM"; ResourceId=$apiResources["Dynamics CRM"]; Permission="user_impersonation"; ScopeId=(Get-ScopeId $apiResources["Dynamics CRM"] "user_impersonation")}
+    @{API="Microsoft Graph"; ResourceId=$apiResources["Microsoft Graph"]; Permission="User.Read"; ScopeId=(Get-ScopeId $apiResources["Microsoft Graph"] "User.Read")}
+    @{API="BAP API"; ResourceId=$apiResources["BAP API"]; Permission="user_impersonation"; ScopeId=(Get-ScopeId $apiResources["BAP API"] "user_impersonation")}
 )
 
 Write-Host "`nAdding API Permissions..." -ForegroundColor $InfoColor
@@ -129,6 +143,10 @@ $addedCount = 0
 $skippedCount = 0
 
 foreach ($perm in $permissions) {
+    if (-not $perm.ScopeId) {
+        Write-Warning-Custom "Skipping $($perm.API) - could not resolve scope ID"
+        continue
+    }
     Write-Info "Adding $($perm.API) - $($perm.Permission)..."
     
     $result = az ad app permission add `
