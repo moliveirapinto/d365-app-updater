@@ -195,7 +195,7 @@ async function handleAuthentication(event) {
         await msalInstance.initialize();
         await msalInstance.handleRedirectPromise(); // Clear any stale redirect state
         
-        // Sign in with a single popup, consenting to both APIs at once
+        // Sign in and consent to both APIs
         showLoading('Authenticating...', 'Signing in to Microsoft');
         const accounts = msalInstance.getAllAccounts();
         let account;
@@ -217,6 +217,18 @@ async function handleAuthentication(event) {
         ppToken = ppResult.accessToken;
         
         console.log('Power Platform API token acquired');
+        
+        // Eagerly acquire BAP token (popup fallback if consent wasn't granted)
+        showLoading('Authenticating...', 'Getting BAP API access');
+        const bapRequest = { scopes: ['https://api.bap.microsoft.com/.default'], account };
+        try {
+            await msalInstance.acquireTokenSilent(bapRequest);
+        } catch (e) {
+            console.log('BAP silent failed, requesting consent via popup...');
+            await msalInstance.acquireTokenPopup(bapRequest);
+        }
+        
+        console.log('BAP API token acquired');
         
         // Resolve Organization URL to Environment ID via BAP API
         showLoading('Authenticating...', 'Resolving Organization URL to Environment...');
@@ -477,8 +489,18 @@ async function fetchAllPages(url, token) {
 async function getBAPToken() {
     const accounts = msalInstance.getAllAccounts();
     const bapRequest = { scopes: ['https://api.bap.microsoft.com/.default'], account: accounts[0] };
-    const result = await msalInstance.acquireTokenSilent(bapRequest);
-    return result.accessToken;
+    try {
+        const result = await msalInstance.acquireTokenSilent(bapRequest);
+        return result.accessToken;
+    } catch (e) {
+        // Fallback: try popup for consent (may be blocked if not user-initiated)
+        try {
+            const result = await msalInstance.acquireTokenPopup(bapRequest);
+            return result.accessToken;
+        } catch (popupError) {
+            throw new Error('BAP API access denied. Please re-run the Setup Wizard to grant admin consent, or allow popups for this site.');
+        }
+    }
 }
 
 // Load applications from Power Platform API
