@@ -1,27 +1,19 @@
 # D365 Power Platform App Updater
 
-⚠️ **IMPORTANT: This is currently a DEMO/PROTOTYPE version with simulated data.**
-
 A web-based tool to manage and update Microsoft Dynamics 365 / Power Platform applications in bulk. This tool addresses the limitation in the Power Platform Admin Center where you can only update apps one at a time.
-
-## ⚠️ Current Status
-
-**DEMO VERSION**: The current implementation uses simulated/mock data for demonstration purposes:
-- ✅ Authentication with Azure AD works correctly
-- ✅ UI and user experience is fully functional  
-- ❌ App update detection is simulated (not reading real available updates)
-- ❌ Update installation is simulated (not actually updating apps)
-
-**To implement real functionality**, see [POWERPLATFORM_API.md](POWERPLATFORM_API.md) for detailed implementation guide.
 
 ## 🎯 Features
 
-- **Bulk App Updates**: Update all available apps at once (when implemented)
-- **Individual Updates**: Update specific apps one by one
-- **Authentication**: Secure MSAL-based authentication ✅ Working
-- **Update Detection**: Automatically detects which apps have updates available (⚠️ Simulated)
-- **User-Friendly Interface**: Clean, modern Bootstrap UI ✅ Working
-- **Session Management**: Option to remember credentials ✅ Working
+- ✅ **Bulk App Updates**: Update all available apps at once
+- ✅ **Multi-Select Updates**: Select specific apps to update
+- ✅ **Environment Switcher**: Quickly switch between environments
+- ✅ **Individual Updates**: Update specific apps one by one
+- ✅ **Authentication**: Secure MSAL-based authentication
+- ✅ **Update Detection**: Automatically detects which apps have updates available
+- ✅ **User-Friendly Interface**: Clean, modern Bootstrap UI
+- ✅ **Session Management**: Persistent login across sessions
+- ✅ **Admin Dashboard**: Track usage analytics with Supabase
+- ✅ **Real-time Status**: Live update status tracking
 
 ## 🚀 Getting Started
 
@@ -33,6 +25,28 @@ A web-based tool to manage and update Microsoft Dynamics 365 / Power Platform ap
 
 ### Azure AD Setup
 
+⚡ **EASIEST WAY: Use Our Automated Setup Script!**
+
+1. Create an app registration in [Azure Portal](https://portal.azure.com) → Azure AD → App registrations
+   - Name: `D365 App Updater`
+   - Account type: Single tenant
+   - Click Register
+
+2. Run our automated setup script:
+   ```powershell
+   .\setup-azure-permissions.ps1
+   ```
+   - It will automatically configure ALL required API permissions
+   - It will add redirect URIs
+   - It will grant admin consent
+   - **Done in 30 seconds!**
+
+📖 **See [QUICKSTART.md](QUICKSTART.md) for step-by-step instructions**
+
+---
+
+**Manual Setup (if script doesn't work):**
+
 1. Navigate to [Azure Portal](https://portal.azure.com)
 2. Go to **Azure Active Directory** → **App registrations**
 3. Click **"New registration"**
@@ -41,15 +55,21 @@ A web-based tool to manage and update Microsoft Dynamics 365 / Power Platform ap
    - **Supported account types**: Single tenant
    - **Redirect URI**: 
      - Platform: **Single-page application (SPA)**
-     - URI: Your app URL (e.g., `http://localhost:8000` or your hosted URL)
+     - URI: `https://moliveirapinto.github.io/d365-app-updater/`
 
 5. After registration:
    - Go to **Authentication** → Enable "Access tokens" and "ID tokens"
-   - Go to **API permissions** → Add permission
-   - Select **Dynamics CRM** → Delegated permissions → **user_impersonation**
-   - Click **"Grant admin consent"**
+   - Go to **API permissions** → Add ALL these permissions:
+     - **Power Platform API** → user_impersonation
+     - **Dynamics CRM** → user_impersonation  
+     - **Microsoft Graph** → User.Read
+     - **BAP/Power Platform Environment Service** → User
+     - **PowerApps Service** → User
+   - Click **"Grant admin consent for [Your Org]"** ⚠️ Required!
 
 6. Copy your **Application (client) ID** and **Directory (tenant) ID**
+
+📖 **Detailed manual setup:** [AZURE_AD_SETUP.md](AZURE_AD_SETUP.md)
 
 ## 📦 Installation
 

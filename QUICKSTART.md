@@ -5,12 +5,46 @@ Get up and running with D365 Power Platform App Updater in 5 minutes!
 ## 📋 Prerequisites
 
 - Microsoft 365 account with D365/Power Platform access
-- Admin rights to create Azure AD app registrations
+- Admin rights to create Azure AD app registrations (Global Admin or Application Admin)
+- Azure CLI installed ([Download here](https://aka.ms/InstallAzureCLIDocs))
 - Modern web browser (Chrome, Edge, Firefox)
 
-## 🚀 5-Minute Setup
+## 🚀 Automated Setup (EASIEST - 2 minutes!)
 
-### 1️⃣ Create Azure AD App (2 minutes)
+### ⭐ NEW: One-Click Setup Script
+
+**This is the easiest way!** Run our automated setup script to configure everything:
+
+1. **Create the App Registration First:**
+   - Go to [Azure Portal](https://portal.azure.com) → Azure Active Directory → App registrations
+   - Click **"New registration"**
+   - Name: `D365 App Updater`
+   - Account type: `Single tenant`
+   - Click **"Register"**
+   - Copy your **Client ID** (you'll need it in step 2)
+
+2. **Run the Setup Script:**
+   - Download or clone this repository
+   - Right-click `setup-azure-permissions.ps1` → **Run with PowerShell**
+   - Or run manually:
+   ```powershell
+   cd "path\to\Update all apps"
+   .\setup-azure-permissions.ps1
+   ```
+   - Enter your Client ID when prompted
+   - The script will automatically:
+     - ✅ Add all required API permissions
+     - ✅ Configure redirect URIs
+     - ✅ Grant admin consent
+     - ✅ Verify everything is set up correctly
+
+3. **Done!** Go to https://moliveirapinto.github.io/d365-app-updater/ and sign in!
+
+---
+
+## 🛠️ Manual Setup (if automated script doesn't work)
+
+### 1️⃣ Create Azure AD App (5 minutes)
 
 1. Go to [Azure Portal](https://portal.azure.com) → Azure Active Directory → App registrations
 2. Click **"New registration"**
@@ -20,15 +54,20 @@ Get up and running with D365 Power Platform App Updater in 5 minutes!
 4. Click **"Register"**
 5. In **Authentication**:
    - Click "Add a platform" → "Single-page application"
-   - Add redirect URI: `http://localhost:8000`
+   - Add redirect URI: `https://moliveirapinto.github.io/d365-app-updater/`
    - Enable "Access tokens" and "ID tokens"
-6. In **API permissions**:
-   - Click "Add a permission" → "Dynamics CRM"
-   - Select "user_impersonation"
-   - Click "Grant admin consent"
+6. In **API permissions** - Add ALL of these:
+   - **Power Platform API** → user_impersonation
+   - **Dynamics CRM** → user_impersonation
+   - **Microsoft Graph** → User.Read
+   - **BAP/Power Platform Environment Service** → User
+   - **PowerApps Service** → User
+   - Click **"Grant admin consent for [Your Org]"** (IMPORTANT!)
 7. Copy your **Client ID** and **Tenant ID** from the Overview page
 
-### 2️⃣ Run the App (2 minutes)
+📖 **Need detailed instructions?** See [AZURE_AD_SETUP.md](AZURE_AD_SETUP.md)
+
+### 2️⃣ Use the App (1 minute)
 
 #### Option A: Using PowerShell (Recommended for Windows)
 
