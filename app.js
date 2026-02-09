@@ -152,7 +152,10 @@ document.addEventListener('DOMContentLoaded', async function() {
     logInfo('=== APP INITIALIZATION ===');
     logInfo('URL', { href: window.location.href, hash: window.location.hash ? 'present' : 'none', pathname: window.location.pathname });
     logInfo('Auth step in storage', sessionStorage.getItem('d365_auth_step'));
-    logInfo('Saved creds exist', !!localStorage.getItem('d365_app_updater_creds'));
+    logInfo('Saved creds', { 
+        sessionStorage: !!sessionStorage.getItem('d365_app_updater_creds_temp'), 
+        localStorage: !!localStorage.getItem('d365_app_updater_creds') 
+    });
 
     // If returning from wizard auth redirect, handle MSAL here on the root page
     // (MSAL requires redirect response to be processed on the same URL that was used as redirectUri)
@@ -338,11 +341,22 @@ Your Azure AD app registration is missing required permissions.<br><br>
         return;
     }
     
-    const savedCreds = localStorage.getItem('d365_app_updater_creds');
+    // Try to get credentials from sessionStorage first (survives redirect, works with tracking prevention)
+    // then fall back to localStorage (for "remember me" functionality)
+    let savedCreds = sessionStorage.getItem('d365_app_updater_creds_temp');
+    let credsSource = 'sessionStorage';
+    
     if (!savedCreds) {
-        logInfo('No saved credentials, user must log in manually');
+        savedCreds = localStorage.getItem('d365_app_updater_creds');
+        credsSource = 'localStorage';
+    }
+    
+    if (!savedCreds) {
+        logInfo('No saved credentials in sessionStorage or localStorage, user must log in manually');
         return;
     }
+    
+    logInfo('Found credentials in ' + credsSource);
 
     let creds;
     try {
@@ -526,12 +540,25 @@ Your Azure AD app registration is missing required permissions.<br><br>
         document.getElementById('authSection').classList.add('hidden');
         document.getElementById('appsSection').classList.remove('hidden');
 
+        // Clean up temp credentials from sessionStorage
+        sessionStorage.removeItem('d365_app_updater_creds_temp');
+        
+        // If user wanted to remember, try to save to localStorage (may fail with tracking prevention)
+        if (creds.rememberMe) {
+            try {
+                localStorage.setItem('d365_app_updater_creds', JSON.stringify({ orgUrl: creds.orgUrl, tenantId: creds.tenantId, clientId: creds.clientId }));
+            } catch (e) {
+                logWarn('Could not save to localStorage for remember me', e.message);
+            }
+        }
+
         logInfo('=== AUTH SUCCESS ===', account.username);
         await loadApplications();
 
     } catch (e) {
         sessionStorage.removeItem('d365_auth_step');
         sessionStorage.removeItem('d365_redirect_count');
+        sessionStorage.removeItem('d365_app_updater_creds_temp'); // Clean up temp creds on error too
         logError('=== AUTH FAILED ===', e.message);
         hideLoading();
         
@@ -626,9 +653,19 @@ async function handleAuthentication(event) {
         return;
     }
     
+    // ALWAYS save to sessionStorage for redirect flow (survives redirect, works with tracking prevention)
+    const credsObj = { orgUrl: orgUrlValue, tenantId, clientId, rememberMe };
+    sessionStorage.setItem('d365_app_updater_creds_temp', JSON.stringify(credsObj));
+    logInfo('Credentials saved to sessionStorage for redirect');
+    
+    // Also try localStorage if user wants to remember (may fail with tracking prevention)
     if (rememberMe) {
-        localStorage.setItem('d365_app_updater_creds', JSON.stringify({ orgUrl: orgUrlValue, tenantId, clientId }));
-        logInfo('Credentials saved to localStorage');
+        try {
+            localStorage.setItem('d365_app_updater_creds', JSON.stringify({ orgUrl: orgUrlValue, tenantId, clientId }));
+            logInfo('Credentials also saved to localStorage');
+        } catch (e) {
+            logWarn('Could not save to localStorage (tracking prevention?)', e.message);
+        }
     }
     
     // Clear any previous auth step state to start fresh
