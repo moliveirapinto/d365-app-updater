@@ -124,6 +124,31 @@ let _pendingRedirectAuth = false;
 
 // Initialize on page load
 document.addEventListener('DOMContentLoaded', async function() {
+    // ═══ EMERGENCY RESET: Add ?reset to URL to clear all auth state ═══
+    const urlParams = new URLSearchParams(window.location.search);
+    if (urlParams.has('reset')) {
+        console.log('🔄 RESET MODE: Clearing all authentication state...');
+        localStorage.removeItem('d365_app_updater_creds');
+        sessionStorage.removeItem('d365_auth_step');
+        sessionStorage.removeItem('d365_redirect_count');
+        sessionStorage.removeItem(LOG_STORAGE_KEY);
+        // Clear MSAL cache
+        localStorage.removeItem('msal.token.keys.' + urlParams.get('reset'));
+        // Clear all MSAL-related items
+        Object.keys(localStorage).forEach(key => {
+            if (key.startsWith('msal.')) localStorage.removeItem(key);
+        });
+        Object.keys(sessionStorage).forEach(key => {
+            if (key.startsWith('msal.') || key.startsWith('d365_') || key.startsWith('wizard_')) {
+                sessionStorage.removeItem(key);
+            }
+        });
+        alert('✅ All authentication data cleared! You can now start fresh.');
+        // Redirect to clean URL
+        window.location.href = window.location.origin + window.location.pathname;
+        return;
+    }
+
     logInfo('=== APP INITIALIZATION ===');
     logInfo('URL', { href: window.location.href, hash: window.location.hash ? 'present' : 'none', pathname: window.location.pathname });
     logInfo('Auth step in storage', sessionStorage.getItem('d365_auth_step'));
