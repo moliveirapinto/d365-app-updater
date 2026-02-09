@@ -241,6 +241,54 @@ function loadSavedCredentials() {
 async function handleRedirectResponse() {
     logInfo('=== handleRedirectResponse START ===');
     
+    // Check if URL hash contains an error response from Azure AD
+    const hash = window.location.hash;
+    if (hash && (hash.includes('error=') || hash.includes('error_description='))) {
+        logError('Azure AD returned an error in the URL');
+        
+        // Try to decode the error
+        const hashParams = new URLSearchParams(hash.substring(1));
+        const error = hashParams.get('error');
+        const errorDesc = decodeURIComponent(hashParams.get('error_description') || 'Unknown error');
+        
+        logError('Azure AD Error', { error, errorDesc });
+        
+        // Clear all auth state
+        localStorage.removeItem('d365_app_updater_creds');
+        sessionStorage.removeItem('d365_auth_step');
+        sessionStorage.removeItem('d365_redirect_count');
+        Object.keys(localStorage).forEach(key => {
+            if (key.startsWith('msal.')) localStorage.removeItem(key);
+        });
+        Object.keys(sessionStorage).forEach(key => {
+            if (key.startsWith('msal.')) sessionStorage.removeItem(key);
+        });
+        
+        // Clean the URL
+        history.replaceState(null, '', window.location.pathname);
+        
+        // Show error
+        const resetButton = `<br><br><button onclick="window.location.reload()" style="background:#0078d4;color:white;border:none;padding:10px 20px;border-radius:6px;cursor:pointer;font-weight:600;">🔄 Start Fresh</button>`;
+        
+        let friendlyMessage = errorDesc;
+        if (errorDesc.includes('AADSTS650057') || errorDesc.includes('not listed in the requested permissions')) {
+            friendlyMessage = `<strong>Missing API Permissions</strong><br><br>
+Your Azure AD app registration is missing required permissions.<br><br>
+<strong>To fix this:</strong><br>
+1. Go to <a href="https://portal.azure.com/#view/Microsoft_AAD_RegisteredApps/ApplicationsListBlade" target="_blank" rel="noopener">Azure Portal → App Registrations</a><br>
+2. Find and click on your app<br>
+3. Go to <strong>API permissions</strong> → <strong>Add a permission</strong><br>
+4. Add: <strong>Power Platform API</strong> → Delegated → <code>user_impersonation</code><br>
+5. Add: <strong>Dynamics CRM</strong> → Delegated → <code>user_impersonation</code><br>
+6. Click <strong>Grant admin consent</strong>${resetButton}`;
+        } else {
+            friendlyMessage = `<strong>Authentication Error</strong><br><br>${errorDesc}${resetButton}`;
+        }
+        
+        showError(friendlyMessage);
+        return;
+    }
+    
     const savedCreds = localStorage.getItem('d365_app_updater_creds');
     if (!savedCreds) {
         logInfo('No saved credentials, user must log in manually');
@@ -438,8 +486,34 @@ async function handleRedirectResponse() {
         logError('=== AUTH FAILED ===', e.message);
         hideLoading();
         
+        // CRITICAL: Clear ALL saved state to prevent auto-login loop
+        localStorage.removeItem('d365_app_updater_creds');
+        
+        // Clear ALL MSAL cache (localStorage AND sessionStorage)
+        Object.keys(localStorage).forEach(key => {
+            if (key.startsWith('msal.')) localStorage.removeItem(key);
+        });
+        Object.keys(sessionStorage).forEach(key => {
+            if (key.startsWith('msal.')) sessionStorage.removeItem(key);
+        });
+        
+        // Clean URL hash if present (prevents re-processing on next attempt)
+        if (window.location.hash) {
+            history.replaceState(null, '', window.location.pathname);
+        }
+        
+        // Make sure auth section is visible
+        document.getElementById('authSection').classList.remove('hidden');
+        document.getElementById('appsSection').classList.add('hidden');
+        
+        // Clear the form's "remember me" checkbox
+        const rememberMe = document.getElementById('rememberMe');
+        if (rememberMe) rememberMe.checked = false;
+        
         // Provide helpful error messages for common issues
         let errorMessage = e.message;
+        const resetButton = `<br><br><button onclick="window.location.reload()" style="background:#0078d4;color:white;border:none;padding:10px 20px;border-radius:6px;cursor:pointer;font-weight:600;">🔄 Start Fresh</button>`;
+        
         if (e.message.includes('AADSTS650057') || e.message.includes('Invalid resource') || e.message.includes('not listed in the requested permissions')) {
             errorMessage = `<strong>Missing API Permissions</strong><br><br>
 Your Azure AD app registration is missing required permissions.<br><br>
@@ -449,17 +523,19 @@ Your Azure AD app registration is missing required permissions.<br><br>
 3. Go to <strong>API permissions</strong> → <strong>Add a permission</strong><br>
 4. Add: <strong>Power Platform API</strong> → Delegated → <code>user_impersonation</code><br>
 5. Add: <strong>Dynamics CRM</strong> → Delegated → <code>user_impersonation</code><br>
-6. Click <strong>Grant admin consent</strong><br><br>
-<small style="color:#888">Error details: ${e.message.substring(0, 200)}...</small>`;
+6. Click <strong>Grant admin consent</strong>${resetButton}<br><br>
+<small style="color:#888">Error: ${e.message.substring(0, 150)}...</small>`;
         } else if (e.message.includes('AADSTS700016') || e.message.includes('not found in the directory')) {
             errorMessage = `<strong>Application Not Found</strong><br><br>
 The Client ID does not exist in the specified tenant.<br>
-Please verify your Tenant ID and Client ID are correct.`;
+Please verify your Tenant ID and Client ID are correct.${resetButton}`;
         } else if (e.message.includes('AADSTS50011') || e.message.includes('reply URL') || e.message.includes('redirect')) {
             errorMessage = `<strong>Invalid Redirect URI</strong><br><br>
 The redirect URI is not configured in your app registration.<br><br>
 Add this URI to your app's redirect URIs:<br>
-<code>${window.location.origin + window.location.pathname.substring(0, window.location.pathname.lastIndexOf('/') + 1)}</code>`;
+<code>${window.location.origin + window.location.pathname.substring(0, window.location.pathname.lastIndexOf('/') + 1)}</code>${resetButton}`;
+        } else {
+            errorMessage = `<strong>Authentication Failed</strong><br><br>${e.message}${resetButton}`;
         }
         
         showError(errorMessage);
@@ -1898,7 +1974,12 @@ function hideLoading() {
 
 function showError(message) {
     hideLoading();
-    showModal({ title: 'Error', message: message, type: 'danger', confirmOnly: true });
+    // Use 'body' for HTML content, 'message' for plain text
+    if (message.includes('<') && message.includes('>')) {
+        showModal({ title: 'Error', body: message, type: 'danger', confirmOnly: true });
+    } else {
+        showModal({ title: 'Error', message: message, type: 'danger', confirmOnly: true });
+    }
 }
 
 function escapeHtml(text) {
