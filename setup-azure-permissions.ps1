@@ -113,7 +113,6 @@ $apiResources = @{
     "Dynamics CRM" = "00000007-0000-0000-c000-000000000000"
     "Microsoft Graph" = "00000003-0000-0000-c000-000000000000"
     "BAP/Power Platform Environment Service" = "475226c6-020e-4fb2-8a90-7a972cbfc1d4"
-    "PowerApps Service" = "8109c6e9-c0b9-4c9a-a8b4-0e2a11d7a2a9"
 }
 
 # Define all required permissions with their scope IDs
@@ -122,7 +121,6 @@ $permissions = @(
     @{API="Dynamics CRM"; ResourceId=$apiResources["Dynamics CRM"]; Permission="user_impersonation"; ScopeId="78ce3f0f-a1ce-49c2-8cde-64b5c0896db4"}
     @{API="Microsoft Graph"; ResourceId=$apiResources["Microsoft Graph"]; Permission="User.Read"; ScopeId="e1fe6dd8-ba31-4d61-89e7-88639da4683d"}
     @{API="BAP/Power Platform Environment Service"; ResourceId=$apiResources["BAP/Power Platform Environment Service"]; Permission="user_impersonation"; ScopeId="47bdd03f-c0f9-4f02-8e03-8f58c47c2c3d"}
-    @{API="PowerApps Service"; ResourceId=$apiResources["PowerApps Service"]; Permission="User"; ScopeId="2f67e4e1-3e7f-4b3e-a5ed-1e6cb0a0b4c1"}
 )
 
 Write-Host "`nAdding API Permissions..." -ForegroundColor $InfoColor

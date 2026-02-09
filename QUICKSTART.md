@@ -61,7 +61,6 @@ Get up and running with D365 Power Platform App Updater in 5 minutes!
    - **Dynamics CRM** → user_impersonation
    - **Microsoft Graph** → User.Read
    - **BAP/Power Platform Environment Service** → User
-   - **PowerApps Service** → User
    - Click **"Grant admin consent for [Your Org]"** (IMPORTANT!)
 7. Copy your **Client ID** and **Tenant ID** from the Overview page
 

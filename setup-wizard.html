@@ -285,7 +285,6 @@
                         <li><i class="fas fa-check"></i>Add Dynamics CRM permissions</li>
                         <li><i class="fas fa-check"></i>Add Microsoft Graph permissions</li>
                         <li><i class="fas fa-check"></i>Add BAP API permissions</li>
-                        <li><i class="fas fa-check"></i>Add PowerApps Service permissions</li>
                         <li><i class="fas fa-check"></i>Grant admin consent for all</li>
                     </ul>
                 </div>
@@ -369,8 +368,7 @@
                         <li class="mb-2" id="prog2"><i class="fas fa-circle text-muted me-2"></i>Adding Dynamics CRM...</li>
                         <li class="mb-2" id="prog3"><i class="fas fa-circle text-muted me-2"></i>Adding Microsoft Graph...</li>
                         <li class="mb-2" id="prog4"><i class="fas fa-circle text-muted me-2"></i>Adding BAP API...</li>
-                        <li class="mb-2" id="prog5"><i class="fas fa-circle text-muted me-2"></i>Adding PowerApps Service...</li>
-                        <li class="mb-2" id="prog6"><i class="fas fa-circle text-muted me-2"></i>Granting admin consent...</li>
+                        <li class="mb-2" id="prog5"><i class="fas fa-circle text-muted me-2"></i>Granting admin consent...</li>
                     </ul>
                 </div>
 
@@ -397,7 +395,6 @@
                             <li>✅ Dynamics CRM</li>
                             <li>✅ Microsoft Graph</li>
                             <li>✅ BAP/Environment Service</li>
-                            <li>✅ PowerApps Service</li>
                             <li>✅ Admin Consent Granted</li>
                         </ul>
                     </div>
@@ -442,8 +439,7 @@
             powerPlatform: { id: '8578e004-a5c6-46e7-913e-12f58912df43', scope: '9f7795e2-ce4f-42d1-b8c2-bc6c8af81d8f', name: 'Power Platform API' },
             dynamicsCrm: { id: '00000007-0000-0000-c000-000000000000', scope: '78ce3f0f-a1ce-49c2-8cde-64b5c0896db4', name: 'Dynamics CRM' },
             msGraph: { id: '00000003-0000-0000-c000-000000000000', scope: 'e1fe6dd8-ba31-4d61-89e7-88639da4683d', name: 'Microsoft Graph' },
-            bap: { id: '475226c6-020e-4fb2-8a90-7a972cbfc1d4', scope: '47bdd03f-c0f9-4f02-8e03-8f58c47c2c3d', name: 'BAP API' },
-            powerApps: { id: '8109c6e9-c0b9-4c9a-a8b4-0e2a11d7a2a9', scope: '2f67e4e1-3e7f-4b3e-a5ed-1e6cb0a0b4c1', name: 'PowerApps Service' }
+            bap: { id: '475226c6-020e-4fb2-8a90-7a972cbfc1d4', scope: '47bdd03f-c0f9-4f02-8e03-8f58c47c2c3d', name: 'BAP API' }
         };
 
         function copyRedirectUri() {
@@ -577,9 +573,9 @@
                 }
 
                 // Grant admin consent
-                updateProgress(6, 'running');
+                updateProgress(5, 'running');
                 await grantAdminConsent(appObjectId);
-                updateProgress(6, 'complete');
+                updateProgress(5, 'complete');
 
                 // Success!
                 await new Promise(r => setTimeout(r, 1000));

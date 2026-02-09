@@ -64,7 +64,6 @@ A web-based tool to manage and update Microsoft Dynamics 365 / Power Platform ap
      - **Dynamics CRM** → user_impersonation  
      - **Microsoft Graph** → User.Read
      - **BAP/Power Platform Environment Service** → User
-     - **PowerApps Service** → User
    - Click **"Grant admin consent for [Your Org]"** ⚠️ Required!
 
 6. Copy your **Application (client) ID** and **Directory (tenant) ID**
