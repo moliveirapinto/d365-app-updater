@@ -248,27 +248,9 @@
                         <strong>Supported account types:</strong> Keep default (Single tenant)
                     </li>
                     <li class="mb-3">
-                        <strong>Redirect URI:</strong>
-                        <div class="input-group mt-2">
-                            <span class="input-group-text">Platform</span>
-                            <select class="form-select" disabled>
-                                <option>Single-page application (SPA)</option>
-                            </select>
-                        </div>
-                        <div class="input-group mt-2">
-                            <input type="text" class="form-control" id="redirectUriDisplay" value="" readonly>
-                            <button class="btn btn-outline-secondary" onclick="copyRedirectUri()">
-                                <i class="fas fa-copy"></i>
-                            </button>
-                        </div>
-                        <small class="text-muted">Copy this URL and paste it in the Redirect URI field</small>
-                        <script>
-                            // Set redirect URI dynamically to this page's URL
-                            document.getElementById('redirectUriDisplay').value = window.location.origin + window.location.pathname;
-                        </script>
-                        <div class="mt-2">
-                            <img src="img/demo.jpeg" alt="Example configuration" class="img-thumbnail" style="max-width:180px; cursor:pointer; border-radius:8px; opacity:0.9; transition:opacity 0.15s;" onclick="document.getElementById('imgModal').style.display='flex'" onmouseover="this.style.opacity='1'" onmouseout="this.style.opacity='0.9'">
-                            <div class="text-muted mt-1" style="font-size:0.75rem;">Click to enlarge</div>
+                        <strong>Redirect URI:</strong> <span class="badge bg-success">Skip this!</span>
+                        <div class="text-muted small mt-1">
+                            <i class="fas fa-magic me-1"></i>The wizard will add redirect URIs automatically
                         </div>
                     </li>
                     <li class="mb-3">
@@ -312,20 +294,42 @@
                 </div>
             </div>
 
-            <!-- Step 2: Adding Permissions -->
+            <!-- Step 2: Sign In with Device Code -->
             <div class="step-content" id="step2">
-                <h3 class="mb-3">Signing In...</h3>
+                <h3 class="mb-3">Sign In as Admin</h3>
                 
-                <div class="loading-spinner show">
+                <div id="deviceCodeSection" style="display: none;">
+                    <div class="alert alert-primary">
+                        <i class="fas fa-sign-in-alt me-2"></i>
+                        <strong>Sign in required</strong>
+                    </div>
+                    
+                    <p>To configure your app, please sign in with an account that has <strong>Application Administrator</strong> or <strong>Global Admin</strong> role:</p>
+                    
+                    <ol class="mb-3">
+                        <li class="mb-2">Click the button below to open Microsoft sign-in</li>
+                        <li class="mb-2">Enter this code: <strong class="fs-4 text-primary" id="userCodeDisplay">--------</strong></li>
+                        <li class="mb-2">Sign in with your admin account</li>
+                        <li>Return here - the wizard will continue automatically</li>
+                    </ol>
+                    
+                    <div class="d-grid gap-2 mb-3">
+                        <a id="deviceLoginLink" href="https://microsoft.com/devicelogin" target="_blank" class="btn btn-primary btn-lg">
+                            <i class="fas fa-external-link-alt me-2"></i>Open Microsoft Sign-In
+                        </a>
+                    </div>
+                    
+                    <div class="text-center">
+                        <div class="spinner-border spinner-border-sm text-primary me-2" role="status"></div>
+                        <span class="text-muted" id="deviceCodeStatus">Waiting for you to sign in...</span>
+                    </div>
+                </div>
+                
+                <div class="loading-spinner show" id="step2Loading">
                     <div class="spinner-border" role="status">
                         <span class="visually-hidden">Loading...</span>
                     </div>
-                    <p class="mt-3 text-muted" id="progressText">Please sign in when prompted...</p>
-                </div>
-
-                <div class="alert alert-info" style="display: none;" id="signInHint">
-                    <i class="fas fa-info-circle me-2"></i>
-                    You will be redirected to Microsoft to sign in. After signing in, you'll be returned here automatically.
+                    <p class="mt-3 text-muted" id="progressText">Preparing sign-in...</p>
                 </div>
 
                 <div class="error-box" id="error2">
@@ -451,167 +455,18 @@
             console.log(`[WIZARD ${ts}] ${msg}`, data || '');
         }
 
-        // On page load: check if we're returning from a redirect login
+        // On page load: simple initialization (no redirect handling needed with device code flow)
         document.addEventListener('DOMContentLoaded', async function() {
             wizardLog('Page loaded', { 
-                url: window.location.href,
-                hash: window.location.hash ? 'present (' + window.location.hash.length + ' chars)' : 'none',
-                hasWizardClientId: !!sessionStorage.getItem('wizard_clientId'),
-                hasWizardToken: !!sessionStorage.getItem('wizard_accessToken'),
-                hasWizardError: !!sessionStorage.getItem('wizard_error')
+                url: window.location.href
             });
-
-            const savedClientId = sessionStorage.getItem('wizard_clientId');
             
-            // ═══════════════════════════════════════════════════════════════════════
-            // DIRECT REDIRECT HANDLING: Process MSAL redirect right here on this page
-            // ═══════════════════════════════════════════════════════════════════════
-            if (savedClientId && window.location.hash) {
-                wizardLog('Detected redirect with hash, processing MSAL response...');
-                
-                // Check for error in hash first
-                if (window.location.hash.includes('error')) {
-                    const hashParams = new URLSearchParams(window.location.hash.substring(1));
-                    const error = hashParams.get('error');
-                    const errorDesc = decodeURIComponent(hashParams.get('error_description') || 'Unknown error');
-                    wizardLog('Error in redirect hash', { error, errorDesc });
-                    
-                    sessionStorage.removeItem('wizard_clientId');
-                    history.replaceState(null, '', window.location.pathname);
-                    showError(2, 'Sign-in failed: ' + errorDesc);
-                    moveToStep(2);
-                    document.getElementById('userClientId').value = savedClientId;
-                    return;
-                }
-                
-                // Azure CLI's well-known client ID - must match what we used to initiate sign-in
-                const AZURE_CLI_CLIENT_ID = '04b07795-8ddb-461a-bbee-02f9e1bf7b46';
-                
-                try {
-                    // Initialize MSAL with Azure CLI client ID (same as what we used to sign in)
-                    const wizardMsalConfig = {
-                        auth: {
-                            clientId: AZURE_CLI_CLIENT_ID,
-                            authority: 'https://login.microsoftonline.com/organizations',
-                            redirectUri: window.location.origin + window.location.pathname // setup-wizard.html
-                        },
-                        cache: { cacheLocation: 'sessionStorage', storeAuthStateInCookie: false }
-                    };
-                    
-                    const wizardMsal = new msal.PublicClientApplication(wizardMsalConfig);
-                    await wizardMsal.initialize();
-                    wizardLog('MSAL initialized for redirect handling (Azure CLI client)');
-                    
-                    const response = await wizardMsal.handleRedirectPromise();
-                    wizardLog('handleRedirectPromise result', response ? { 
-                        hasToken: !!response.accessToken, 
-                        scopes: response.scopes,
-                        account: response.account?.username
-                    } : 'null');
-                    
-                    // Clean URL
-                    history.replaceState(null, '', window.location.pathname);
-                    
-                    if (response && response.accessToken) {
-                        wizardLog('Token acquired successfully!');
-                        userProvidedClientId = savedClientId; // The app we want to configure
-                        adminAccessToken = response.accessToken;
-                        document.getElementById('userClientId').value = savedClientId;
-                        sessionStorage.removeItem('wizard_clientId');
-                        
-                        moveToStep(3);
-                        await addPermissions();
-                        return;
-                    } else {
-                        // No token in response, try silent acquisition
-                        wizardLog('No token in redirect response, trying silent acquisition...');
-                        const accounts = wizardMsal.getAllAccounts();
-                        wizardLog('Accounts found', accounts.length);
-                        
-                        if (accounts.length > 0) {
-                            try {
-                                const silentResult = await wizardMsal.acquireTokenSilent({
-                                    scopes: ['https://graph.microsoft.com/Application.ReadWrite.All', 'https://graph.microsoft.com/DelegatedPermissionGrant.ReadWrite.All'],
-                                    account: accounts[0]
-                                });
-                                
-                                if (silentResult && silentResult.accessToken) {
-                                    wizardLog('Token acquired silently!');
-                                    userProvidedClientId = savedClientId;
-                                    adminAccessToken = silentResult.accessToken;
-                                    document.getElementById('userClientId').value = savedClientId;
-                                    sessionStorage.removeItem('wizard_clientId');
-                                    
-                                    moveToStep(3);
-                                    await addPermissions();
-                                    return;
-                                }
-                            } catch (silentErr) {
-                                wizardLog('Silent token acquisition failed', silentErr.message);
-                            }
-                        }
-                        
-                        // Still no token
-                        wizardLog('Failed to acquire token after redirect');
-                        sessionStorage.removeItem('wizard_clientId');
-                        showError(2, 'Failed to get access token. Please try signing in again.');
-                        moveToStep(2);
-                        document.getElementById('userClientId').value = savedClientId;
-                        return;
-                    }
-                } catch (err) {
-                    wizardLog('Error processing redirect', err.message);
-                    history.replaceState(null, '', window.location.pathname);
-                    sessionStorage.removeItem('wizard_clientId');
-                    showError(2, 'Sign-in failed: ' + err.message);
-                    moveToStep(2);
-                    document.getElementById('userClientId').value = savedClientId;
-                    return;
-                }
-            }
-            
-            // Check for error from previous attempt
-            const wizardError = sessionStorage.getItem('wizard_error');
-            if (wizardError) {
-                wizardLog('Error found in storage', wizardError);
-                sessionStorage.removeItem('wizard_error');
-                sessionStorage.removeItem('wizard_clientId');
-                sessionStorage.removeItem('wizard_accessToken');
-                showError(2, 'Sign-in failed: ' + wizardError);
-                moveToStep(2);
-                return;
-            }
-
-            if (!savedClientId) {
-                wizardLog('No pending wizard flow (no clientId in storage)');
-                return; // No pending wizard flow
-            }
-
-            // Check for access token (set by app.js after processing redirect)
-            const accessToken = sessionStorage.getItem('wizard_accessToken');
-            wizardLog('Checking for access token', { hasToken: !!accessToken, tokenPreview: accessToken ? accessToken.substring(0, 20) + '...' : 'none' });
-            
-            if (!accessToken) {
-                // No token and no error - something went wrong, show helpful message
-                wizardLog('No token found, showing retry message');
-                sessionStorage.removeItem('wizard_clientId');
-                showError(2, 'Authentication did not complete. This can happen if pop-ups were blocked or the sign-in was cancelled. Please try again.');
-                moveToStep(2);
-                // Pre-fill the client ID so user doesn't have to re-enter
-                document.getElementById('userClientId').value = savedClientId;
-                return;
-            }
-
-            // We have the token! Clean up and proceed
-            wizardLog('Token found! Proceeding to step 3');
-            userProvidedClientId = savedClientId;
-            adminAccessToken = accessToken;
-            document.getElementById('userClientId').value = savedClientId;
-            sessionStorage.removeItem('wizard_accessToken');
+            // Clean up any stale storage from previous attempts
             sessionStorage.removeItem('wizard_clientId');
-
-            moveToStep(3);
-            await addPermissions();
+            sessionStorage.removeItem('wizard_accessToken');
+            sessionStorage.removeItem('wizard_error');
+            
+            wizardLog('Wizard ready');
         });
 
         function copyRedirectUri() {
@@ -656,28 +511,12 @@
             }
             keysToRemove.forEach(k => sessionStorage.removeItem(k));
 
-            // Use Azure CLI client ID for sign-in - this is a Microsoft first-party app
-            // that's available in all tenants. We'll configure the user's app via Graph API.
-            const msalConfig = {
-                auth: {
-                    clientId: AZURE_CLI_CLIENT_ID,
-                    authority: 'https://login.microsoftonline.com/organizations',
-                    redirectUri: window.location.origin + window.location.pathname // setup-wizard.html
-                },
-                cache: {
-                    cacheLocation: 'sessionStorage',
-                    storeAuthStateInCookie: false
-                }
-            };
-            
-            wizardLog('Initializing MSAL with Azure CLI client', { 
-                userAppClientId: userProvidedClientId.substring(0, 8) + '...', 
-                redirectUri: msalConfig.auth.redirectUri 
+            wizardLog('Starting device code flow', { 
+                userAppClientId: userProvidedClientId.substring(0, 8) + '...' 
             });
 
-            msalInstance = new msal.PublicClientApplication(msalConfig);
             moveToStep(2);
-            signInAdmin();
+            signInWithDeviceCode();
         }
 
         function resetWizard() {
@@ -694,30 +533,88 @@
             window.location.href = window.location.pathname;
         }
 
-        async function signInAdmin() {
+        async function signInWithDeviceCode() {
             try {
-                await msalInstance.initialize();
-                wizardLog('MSAL initialized for sign-in');
-
-                document.getElementById('signInHint').style.display = 'block';
-                document.getElementById('progressText').textContent = 'Redirecting to Microsoft sign-in...';
+                wizardLog('Starting device code flow...');
                 
-                // Save client ID so we can resume after redirect
-                sessionStorage.setItem('wizard_clientId', userProvidedClientId);
-                wizardLog('Saved clientId to sessionStorage, initiating loginRedirect...', {
-                    clientId: userProvidedClientId.substring(0, 8) + '...',
-                    redirectUri: msalInstance.getConfiguration().auth.redirectUri
+                // Step 1: Get device code from Azure AD
+                const deviceCodeResponse = await fetch('https://login.microsoftonline.com/organizations/oauth2/v2.0/devicecode', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                    body: new URLSearchParams({
+                        client_id: AZURE_CLI_CLIENT_ID,
+                        scope: 'https://graph.microsoft.com/Application.ReadWrite.All https://graph.microsoft.com/DelegatedPermissionGrant.ReadWrite.All offline_access'
+                    })
                 });
-
-                await msalInstance.loginRedirect({
-                    scopes: ['https://graph.microsoft.com/Application.ReadWrite.All', 'https://graph.microsoft.com/DelegatedPermissionGrant.ReadWrite.All'],
-                    prompt: 'select_account'
-                });
-                // Browser navigates away — execution stops here
+                
+                if (!deviceCodeResponse.ok) {
+                    const errorText = await deviceCodeResponse.text();
+                    throw new Error('Failed to get device code: ' + errorText);
+                }
+                
+                const deviceCodeData = await deviceCodeResponse.json();
+                wizardLog('Got device code', { user_code: deviceCodeData.user_code });
+                
+                // Step 2: Show the code to the user
+                document.getElementById('step2Loading').style.display = 'none';
+                document.getElementById('deviceCodeSection').style.display = 'block';
+                document.getElementById('userCodeDisplay').textContent = deviceCodeData.user_code;
+                document.getElementById('deviceLoginLink').href = deviceCodeData.verification_uri;
+                
+                // Step 3: Poll for token
+                const pollInterval = deviceCodeData.interval * 1000 || 5000;
+                const expiresAt = Date.now() + (deviceCodeData.expires_in * 1000);
+                
+                wizardLog('Polling for token every ' + (pollInterval/1000) + 's...');
+                
+                while (Date.now() < expiresAt) {
+                    await new Promise(r => setTimeout(r, pollInterval));
+                    
+                    try {
+                        const tokenResponse = await fetch('https://login.microsoftonline.com/organizations/oauth2/v2.0/token', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                            body: new URLSearchParams({
+                                grant_type: 'urn:ietf:params:oauth:grant-type:device_code',
+                                client_id: AZURE_CLI_CLIENT_ID,
+                                device_code: deviceCodeData.device_code
+                            })
+                        });
+                        
+                        const tokenData = await tokenResponse.json();
+                        
+                        if (tokenData.access_token) {
+                            wizardLog('Token acquired successfully!');
+                            adminAccessToken = tokenData.access_token;
+                            document.getElementById('deviceCodeStatus').textContent = 'Sign-in successful!';
+                            
+                            // Proceed to permissions
+                            await new Promise(r => setTimeout(r, 500));
+                            moveToStep(3);
+                            await addPermissions();
+                            return;
+                        } else if (tokenData.error === 'authorization_pending') {
+                            // Still waiting for user
+                            wizardLog('Still waiting for user to sign in...');
+                        } else if (tokenData.error === 'slow_down') {
+                            // Need to slow down polling
+                            wizardLog('Slowing down polling...');
+                            await new Promise(r => setTimeout(r, 5000));
+                        } else if (tokenData.error) {
+                            throw new Error(tokenData.error_description || tokenData.error);
+                        }
+                    } catch (pollError) {
+                        if (pollError.message && !pollError.message.includes('authorization_pending')) {
+                            throw pollError;
+                        }
+                    }
+                }
+                
+                throw new Error('Sign-in timed out. Please try again.');
+                
             } catch (error) {
-                wizardLog('Login error', error.message);
-                sessionStorage.removeItem('wizard_clientId');
-                showError(2, 'Failed to sign in. Make sure you have Application Administrator or Global Admin role. Error: ' + error.message);
+                wizardLog('Login error: ' + error.message);
+                showError(2, 'Failed to sign in: ' + error.message);
             }
         }
 
