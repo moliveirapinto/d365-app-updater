@@ -248,9 +248,16 @@
                         <strong>Supported account types:</strong> Keep default (Single tenant)
                     </li>
                     <li class="mb-3">
-                        <strong>Redirect URI:</strong> <span class="badge bg-success">Skip this!</span>
-                        <div class="text-muted small mt-1">
-                            <i class="fas fa-magic me-1"></i>The wizard will add redirect URIs automatically
+                        <strong>Redirect URI:</strong> <span class="badge bg-primary">Required</span>
+                        <div class="mt-2">
+                            <div class="input-group">
+                                <span class="input-group-text">SPA</span>
+                                <input type="text" class="form-control" id="redirectUriDisplay" readonly>
+                                <button class="btn btn-outline-secondary" onclick="copyRedirectUri()" title="Copy">
+                                    <i class="fas fa-copy"></i>
+                                </button>
+                            </div>
+                            <small class="text-muted">Select <strong>Single-page application (SPA)</strong> and paste this URL</small>
                         </div>
                     </li>
                     <li class="mb-3">
@@ -260,6 +267,9 @@
                         <strong>Copy your Application (client) ID</strong> from the Overview page
                     </li>
                 </ol>
+                <script>
+                    document.getElementById('redirectUriDisplay').value = window.location.origin + '/d365-app-updater/';
+                </script>
 
                 <div class="mb-3">
                     <label for="userClientId" class="form-label"><strong>Enter Your Client ID:</strong></label>
@@ -294,42 +304,32 @@
                 </div>
             </div>
 
-            <!-- Step 2: Sign In with Device Code -->
+            <!-- Step 2: Sign In -->
             <div class="step-content" id="step2">
                 <h3 class="mb-3">Sign In as Admin</h3>
                 
-                <div id="deviceCodeSection" style="display: none;">
-                    <div class="alert alert-primary">
-                        <i class="fas fa-sign-in-alt me-2"></i>
-                        <strong>Sign in required</strong>
-                    </div>
-                    
-                    <p>To configure your app, please sign in with an account that has <strong>Application Administrator</strong> or <strong>Global Admin</strong> role:</p>
-                    
-                    <ol class="mb-3">
-                        <li class="mb-2">Click the button below to open Microsoft sign-in</li>
-                        <li class="mb-2">Enter this code: <strong class="fs-4 text-primary" id="userCodeDisplay">--------</strong></li>
-                        <li class="mb-2">Sign in with your admin account</li>
-                        <li>Return here - the wizard will continue automatically</li>
-                    </ol>
-                    
-                    <div class="d-grid gap-2 mb-3">
-                        <a id="deviceLoginLink" href="https://microsoft.com/devicelogin" target="_blank" class="btn btn-primary btn-lg">
-                            <i class="fas fa-external-link-alt me-2"></i>Open Microsoft Sign-In
-                        </a>
-                    </div>
-                    
-                    <div class="text-center">
-                        <div class="spinner-border spinner-border-sm text-primary me-2" role="status"></div>
-                        <span class="text-muted" id="deviceCodeStatus">Waiting for you to sign in...</span>
-                    </div>
+                <div class="alert alert-info mb-3">
+                    <i class="fas fa-info-circle me-2"></i>
+                    A popup window will open. Sign in with an account that has <strong>Application Administrator</strong> or <strong>Global Admin</strong> role.
                 </div>
                 
                 <div class="loading-spinner show" id="step2Loading">
                     <div class="spinner-border" role="status">
                         <span class="visually-hidden">Loading...</span>
                     </div>
-                    <p class="mt-3 text-muted" id="progressText">Preparing sign-in...</p>
+                    <p class="mt-3 text-muted" id="progressText">Opening sign-in popup...</p>
+                </div>
+                
+                <div id="popupBlockedSection" style="display: none;">
+                    <div class="alert alert-warning">
+                        <i class="fas fa-exclamation-triangle me-2"></i>
+                        <strong>Popup was blocked!</strong> Please allow popups for this site.
+                    </div>
+                    <div class="d-grid gap-2">
+                        <button class="btn btn-primary" onclick="retrySignIn()">
+                            <i class="fas fa-redo me-2"></i>Try Again
+                        </button>
+                    </div>
                 </div>
 
                 <div class="error-box" id="error2">
@@ -497,11 +497,8 @@
 
         // Azure CLI's well-known client ID - works in ALL tenants without pre-configuration
         // This allows us to sign in and get Graph API access without requiring the user's app to be pre-configured
-        const AZURE_CLI_CLIENT_ID = '04b07795-8ddb-461a-bbee-02f9e1bf7b46';
-
         function initializeMSAL() {
             // Clear ALL stale MSAL state from sessionStorage before starting fresh
-            // This prevents "interaction_in_progress" errors from previous failed attempts
             const keysToRemove = [];
             for (let i = 0; i < sessionStorage.length; i++) {
                 const key = sessionStorage.key(i);
@@ -511,12 +508,27 @@
             }
             keysToRemove.forEach(k => sessionStorage.removeItem(k));
 
-            wizardLog('Starting device code flow', { 
-                userAppClientId: userProvidedClientId.substring(0, 8) + '...' 
+            // Use the user's app for sign-in with popup flow
+            const msalConfig = {
+                auth: {
+                    clientId: userProvidedClientId,
+                    authority: 'https://login.microsoftonline.com/organizations',
+                    redirectUri: window.location.origin + '/d365-app-updater/'
+                },
+                cache: {
+                    cacheLocation: 'sessionStorage',
+                    storeAuthStateInCookie: false
+                }
+            };
+            
+            wizardLog('Initializing MSAL', { 
+                clientId: userProvidedClientId.substring(0, 8) + '...', 
+                redirectUri: msalConfig.auth.redirectUri 
             });
 
+            msalInstance = new msal.PublicClientApplication(msalConfig);
             moveToStep(2);
-            signInWithDeviceCode();
+            signInWithPopup();
         }
 
         function resetWizard() {
@@ -533,89 +545,44 @@
             window.location.href = window.location.pathname;
         }
 
-        async function signInWithDeviceCode() {
+        async function signInWithPopup() {
             try {
-                wizardLog('Starting device code flow...');
+                await msalInstance.initialize();
+                wizardLog('MSAL initialized, opening popup...');
                 
-                // Step 1: Get device code from Azure AD
-                const deviceCodeResponse = await fetch('https://login.microsoftonline.com/organizations/oauth2/v2.0/devicecode', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-                    body: new URLSearchParams({
-                        client_id: AZURE_CLI_CLIENT_ID,
-                        scope: 'https://graph.microsoft.com/Application.ReadWrite.All https://graph.microsoft.com/DelegatedPermissionGrant.ReadWrite.All offline_access'
-                    })
+                const response = await msalInstance.loginPopup({
+                    scopes: [
+                        'https://graph.microsoft.com/Application.ReadWrite.All',
+                        'https://graph.microsoft.com/DelegatedPermissionGrant.ReadWrite.All'
+                    ],
+                    prompt: 'select_account'
                 });
                 
-                if (!deviceCodeResponse.ok) {
-                    const errorText = await deviceCodeResponse.text();
-                    throw new Error('Failed to get device code: ' + errorText);
-                }
+                wizardLog('Popup login successful!', { account: response.account?.username });
+                adminAccessToken = response.accessToken;
                 
-                const deviceCodeData = await deviceCodeResponse.json();
-                wizardLog('Got device code', { user_code: deviceCodeData.user_code });
-                
-                // Step 2: Show the code to the user
                 document.getElementById('step2Loading').style.display = 'none';
-                document.getElementById('deviceCodeSection').style.display = 'block';
-                document.getElementById('userCodeDisplay').textContent = deviceCodeData.user_code;
-                document.getElementById('deviceLoginLink').href = deviceCodeData.verification_uri;
-                
-                // Step 3: Poll for token
-                const pollInterval = deviceCodeData.interval * 1000 || 5000;
-                const expiresAt = Date.now() + (deviceCodeData.expires_in * 1000);
-                
-                wizardLog('Polling for token every ' + (pollInterval/1000) + 's...');
-                
-                while (Date.now() < expiresAt) {
-                    await new Promise(r => setTimeout(r, pollInterval));
-                    
-                    try {
-                        const tokenResponse = await fetch('https://login.microsoftonline.com/organizations/oauth2/v2.0/token', {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-                            body: new URLSearchParams({
-                                grant_type: 'urn:ietf:params:oauth:grant-type:device_code',
-                                client_id: AZURE_CLI_CLIENT_ID,
-                                device_code: deviceCodeData.device_code
-                            })
-                        });
-                        
-                        const tokenData = await tokenResponse.json();
-                        
-                        if (tokenData.access_token) {
-                            wizardLog('Token acquired successfully!');
-                            adminAccessToken = tokenData.access_token;
-                            document.getElementById('deviceCodeStatus').textContent = 'Sign-in successful!';
-                            
-                            // Proceed to permissions
-                            await new Promise(r => setTimeout(r, 500));
-                            moveToStep(3);
-                            await addPermissions();
-                            return;
-                        } else if (tokenData.error === 'authorization_pending') {
-                            // Still waiting for user
-                            wizardLog('Still waiting for user to sign in...');
-                        } else if (tokenData.error === 'slow_down') {
-                            // Need to slow down polling
-                            wizardLog('Slowing down polling...');
-                            await new Promise(r => setTimeout(r, 5000));
-                        } else if (tokenData.error) {
-                            throw new Error(tokenData.error_description || tokenData.error);
-                        }
-                    } catch (pollError) {
-                        if (pollError.message && !pollError.message.includes('authorization_pending')) {
-                            throw pollError;
-                        }
-                    }
-                }
-                
-                throw new Error('Sign-in timed out. Please try again.');
+                moveToStep(3);
+                await addPermissions();
                 
             } catch (error) {
                 wizardLog('Login error: ' + error.message);
-                showError(2, 'Failed to sign in: ' + error.message);
+                
+                if (error.message.includes('popup_window_error') || error.message.includes('block')) {
+                    document.getElementById('step2Loading').style.display = 'none';
+                    document.getElementById('popupBlockedSection').style.display = 'block';
+                } else if (error.message.includes('user_cancelled')) {
+                    showError(2, 'Sign-in was cancelled. Click "Start Over" to try again.');
+                } else {
+                    showError(2, 'Failed to sign in: ' + error.message);
+                }
             }
+        }
+        
+        function retrySignIn() {
+            document.getElementById('popupBlockedSection').style.display = 'none';
+            document.getElementById('step2Loading').style.display = 'block';
+            signInWithPopup();
         }
 
         async function addPermissions() {
