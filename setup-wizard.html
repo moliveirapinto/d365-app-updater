@@ -513,6 +513,8 @@
         async function signInAdmin() {
             try {
                 await msalInstance.initialize();
+                // Clear any stale interaction state from previous redirect attempts
+                await msalInstance.handleRedirectPromise();
 
                 document.getElementById('signInHint').style.display = 'block';
                 document.getElementById('progressText').textContent = 'Redirecting to Microsoft sign-in...';
