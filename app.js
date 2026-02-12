@@ -2335,30 +2335,32 @@ async function saveSchedule() {
                 const setupResult = await setupAppRegistration(schedule.client_id);
                 
                 if (setupResult.success) {
-                    let message = 'Your auto-update schedule has been saved.';
+                    let bodyHtml = '<p>Your auto-update schedule has been saved.</p>';
                     if (setupResult.permissionsAdded) {
-                        message += '<br><br>✅ Dynamics CRM permission added to your app registration.';
+                        bodyHtml += '<p>✅ Dynamics CRM permission added to your app registration.</p>';
                     }
                     if (setupResult.appUserCreated) {
-                        message += '<br>✅ Application user created in Dataverse.';
+                        bodyHtml += '<p>✅ Application user created in Dataverse.</p>';
                     }
-                    message += '<br><br>Updates will run automatically at the scheduled time.';
+                    bodyHtml += '<p>Updates will run automatically at the scheduled time.</p>';
                     
                     showModal({
                         title: 'Schedule Saved',
-                        message: message,
+                        body: bodyHtml,
                         type: 'success',
                         confirmOnly: true
                     });
                 } else {
                     showModal({
                         title: 'Schedule Saved (Manual Setup Needed)',
-                        message: `Your schedule has been saved, but automatic setup failed:<br><br>
-                            <strong>${setupResult.error}</strong><br><br>
-                            Please manually:<br>
-                            1. Add "Dynamics CRM → user_impersonation" permission to your app<br>
-                            2. Grant admin consent<br>
-                            3. Create an Application User in Power Platform Admin Center`,
+                        body: `<p>Your schedule has been saved, but automatic setup failed:</p>
+                            <p><strong>${setupResult.error}</strong></p>
+                            <p>Please manually:</p>
+                            <ol>
+                                <li>Add "Dynamics CRM → user_impersonation" permission to your app</li>
+                                <li>Grant admin consent</li>
+                                <li>Create an Application User in Power Platform Admin Center</li>
+                            </ol>`,
                         type: 'warning',
                         confirmOnly: true
                     });
@@ -2366,7 +2368,7 @@ async function saveSchedule() {
             } else {
                 showModal({
                     title: 'Schedule Saved',
-                    message: 'Your auto-update schedule has been saved. Updates will run automatically at the scheduled time.',
+                    body: '<p>Your auto-update schedule has been saved. Updates will run automatically at the scheduled time.</p>',
                     type: 'success',
                     confirmOnly: true
                 });
