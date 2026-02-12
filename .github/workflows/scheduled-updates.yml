@@ -13,19 +13,39 @@ jobs:
     steps:
       - name: Get enabled schedules from Supabase
         id: get-schedules
+        env:
+          # Use service_role key to read secrets (bypasses RLS)
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
         run: |
-          RESPONSE=$(curl -s "https://fpekzltxukikaixebeeu.supabase.co/rest/v1/update_schedules?enabled=eq.true&select=*" \
-            -H "apikey: ${{ secrets.SUPABASE_KEY }}" \
-            -H "Authorization: Bearer ${{ secrets.SUPABASE_KEY }}")
+          # Fetch schedules with their secrets using service_role key
+          # The service_role key can read from schedule_secrets table
+          SCHEDULES=$(curl -s "https://fpekzltxukikaixebeeu.supabase.co/rest/v1/update_schedules?enabled=eq.true&select=*" \
+            -H "apikey: $SUPABASE_SERVICE_KEY" \
+            -H "Authorization: Bearer $SUPABASE_SERVICE_KEY")
           
-          echo "schedules=$RESPONSE" >> $GITHUB_OUTPUT
-          echo "Found schedules: $RESPONSE"
+          # For each schedule, get the secret from the secure table
+          ENRICHED_SCHEDULES=$(echo "$SCHEDULES" | jq -c '.')
+          
+          # Fetch secrets
+          SECRETS=$(curl -s "https://fpekzltxukikaixebeeu.supabase.co/rest/v1/schedule_secrets?select=schedule_id,client_secret" \
+            -H "apikey: $SUPABASE_SERVICE_KEY" \
+            -H "Authorization: Bearer $SUPABASE_SERVICE_KEY")
+          
+          # Merge schedules with their secrets
+          MERGED=$(echo "$SCHEDULES" | jq --argjson secrets "$SECRETS" '
+            . as $schedules | 
+            ($secrets | map({(.schedule_id | tostring): .client_secret}) | add) as $secretMap |
+            $schedules | map(. + {client_secret: ($secretMap[.id | tostring] // .client_secret)})
+          ')
+          
+          echo "schedules=$MERGED" >> $GITHUB_OUTPUT
+          echo "Found $(echo "$MERGED" | jq length) schedules"
           
       - name: Process schedules
         env:
           SCHEDULES: ${{ steps.get-schedules.outputs.schedules }}
           SUPABASE_URL: https://fpekzltxukikaixebeeu.supabase.co
-          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
         run: |
           # Get current UTC time
           CURRENT_UTC_DAY=$(date -u +%w)
@@ -92,8 +112,8 @@ jobs:
                 
                 # Update last_run status in Supabase
                 curl -s -X PATCH "${SUPABASE_URL}/rest/v1/update_schedules?id=eq.${SCHEDULE_ID}" \
-                  -H "apikey: $SUPABASE_KEY" \
-                  -H "Authorization: Bearer $SUPABASE_KEY" \
+                  -H "apikey: $SUPABASE_SERVICE_KEY" \
+                  -H "Authorization: Bearer $SUPABASE_SERVICE_KEY" \
                   -H "Content-Type: application/json" \
                   -d "{\"last_run_at\": \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\", \"last_run_status\": \"success\"}"
                 
@@ -104,8 +124,8 @@ jobs:
                 
                 # Update status as failed
                 curl -s -X PATCH "${SUPABASE_URL}/rest/v1/update_schedules?id=eq.${SCHEDULE_ID}" \
-                  -H "apikey: $SUPABASE_KEY" \
-                  -H "Authorization: Bearer $SUPABASE_KEY" \
+                  -H "apikey: $SUPABASE_SERVICE_KEY" \
+                  -H "Authorization: Bearer $SUPABASE_SERVICE_KEY" \
                   -H "Content-Type: application/json" \
                   -d "{\"last_run_at\": \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\", \"last_run_status\": \"failed\"}"
               fi

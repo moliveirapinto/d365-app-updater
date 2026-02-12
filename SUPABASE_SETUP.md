@@ -62,11 +62,11 @@ CREATE TABLE update_schedules (
     org_url         TEXT,
     enabled         BOOLEAN DEFAULT false,
     day_of_week     INTEGER CHECK (day_of_week >= 0 AND day_of_week <= 6), -- 0=Sunday, 6=Saturday
-    time_utc        TEXT DEFAULT '03:00', -- HH:MM format in UTC
+    time_utc        TEXT DEFAULT '03:00', -- HH:MM format in user's timezone
     timezone        TEXT DEFAULT 'UTC',
     client_id       TEXT,              -- Azure AD App Registration Client ID
-    client_secret   TEXT,              -- Azure AD App Registration Client Secret
     tenant_id       TEXT,              -- Azure AD Tenant ID
+    has_secret      BOOLEAN DEFAULT false, -- True if secret is stored in schedule_secrets table
     last_run_at     TIMESTAMPTZ,
     last_run_status TEXT,
     last_run_result JSONB,
@@ -100,21 +100,65 @@ CREATE POLICY "Allow anonymous reads"
     USING (true);
 ```
 
-### If you already have the table, add the new columns:
+### SECURITY: Create a Separate Secrets Table (REQUIRED)
+
+The client secrets are stored in a **separate protected table** that the public anon key **cannot read**:
 
 ```sql
-ALTER TABLE update_schedules 
-ADD COLUMN IF NOT EXISTS client_id TEXT,
-ADD COLUMN IF NOT EXISTS client_secret TEXT,
-ADD COLUMN IF NOT EXISTS tenant_id TEXT;
+-- Create a secure table for storing client secrets
+-- Only service_role can read this table (used by GitHub Actions)
+CREATE TABLE schedule_secrets (
+    id              BIGSERIAL PRIMARY KEY,
+    schedule_id     BIGINT NOT NULL REFERENCES update_schedules(id) ON DELETE CASCADE,
+    client_secret   TEXT NOT NULL,
+    created_at      TIMESTAMPTZ DEFAULT now(),
+    updated_at      TIMESTAMPTZ DEFAULT now(),
+    UNIQUE(schedule_id)
+);
+
+-- Enable Row Level Security
+ALTER TABLE schedule_secrets ENABLE ROW LEVEL SECURITY;
+
+-- CRITICAL: Anon can INSERT (create new secrets)
+CREATE POLICY "Anon can insert secrets"
+    ON schedule_secrets FOR INSERT
+    TO anon
+    WITH CHECK (true);
+
+-- CRITICAL: Anon can UPDATE (change existing secrets)
+CREATE POLICY "Anon can upsert secrets"
+    ON schedule_secrets FOR UPDATE
+    TO anon
+    USING (true)
+    WITH CHECK (true);
+
+-- NO SELECT POLICY FOR ANON = anon key CANNOT read secrets
+-- Only service_role (used by GitHub Actions) can read secrets
 ```
 
-## 3. Get Your Project URL and Key
+### If you already have client_secret in update_schedules, migrate it:
+
+```sql
+-- 1. Create the schedule_secrets table (run SQL above first)
+
+-- 2. Migrate existing secrets
+INSERT INTO schedule_secrets (schedule_id, client_secret)
+SELECT id, client_secret FROM update_schedules 
+WHERE client_secret IS NOT NULL AND client_secret != '';
+
+-- 3. Remove secret from main table (optional but recommended)
+ALTER TABLE update_schedules DROP COLUMN IF EXISTS client_secret;
+```
+
+## 3. Get Your Project URL and Keys
 
 1. Go to **Settings** → **API** (left sidebar).
 2. Copy:
    - **Project URL**: `https://xxxxxxxx.supabase.co`
-   - **anon (public) key**: a long JWT string starting with `eyJ...`
+   - **anon (public) key**: Used by the web app (public, safe to expose)
+   - **service_role key**: Used ONLY by GitHub Actions (KEEP SECRET!)
+
+**⚠️ IMPORTANT:** Add the `service_role` key to your GitHub repository secrets as `SUPABASE_SERVICE_KEY`
 
 ## 4. Configure the Admin Dashboard
 

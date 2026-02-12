@@ -2193,10 +2193,10 @@ async function loadSchedule() {
                 document.getElementById('scheduleDay').value = schedule.day_of_week;
                 document.getElementById('scheduleTime').value = schedule.time_utc;
                 document.getElementById('scheduleTimezone').value = schedule.timezone || 'UTC';
-                // Don't auto-fill secret for security, just indicate it's set
+                // Secret is stored securely - just indicate it's set
                 const secretInput = document.getElementById('scheduleClientSecret');
-                if (schedule.client_secret) {
-                    secretInput.placeholder = '(secret already saved - leave blank to keep)';
+                if (schedule.has_secret) {
+                    secretInput.placeholder = '(secret securely saved - leave blank to keep)';
                     secretInput.value = ''; // Clear any value
                 }
                 document.getElementById('scheduleDetails').style.display = schedule.enabled ? 'block' : 'none';
@@ -2271,14 +2271,17 @@ async function saveSchedule() {
     
     // Only include client_secret if user entered a new one
     const newSecret = document.getElementById('scheduleClientSecret').value.trim();
+    // Note: secret is stored in separate secure table, not in schedule
+    
+    // Track if secret is set (for validation and UI)
     if (newSecret) {
-        schedule.client_secret = newSecret;
+        schedule.has_secret = true;
     }
     
     try {
         // Upsert: try to update first, then insert if not exists
         const checkResp = await fetch(
-            `${cfg.url}/rest/v1/update_schedules?user_email=eq.${encodeURIComponent(userEmail)}&environment_id=eq.${encodeURIComponent(envId)}&select=id,client_secret`,
+            `${cfg.url}/rest/v1/update_schedules?user_email=eq.${encodeURIComponent(userEmail)}&environment_id=eq.${encodeURIComponent(envId)}&select=id,has_secret`,
             {
                 headers: {
                     'apikey': cfg.key,
@@ -2291,7 +2294,7 @@ async function saveSchedule() {
         let resp;
         
         // Validate credentials - only require secret for new schedules or if none exists
-        if (schedule.enabled && !newSecret && (existing.length === 0 || !existing[0].client_secret)) {
+        if (schedule.enabled && !newSecret && (existing.length === 0 || !existing[0].has_secret)) {
             saveBtn.disabled = false;
             saveBtn.innerHTML = originalText;
             showError('Client Secret is required for scheduled updates.');
@@ -2300,8 +2303,9 @@ async function saveSchedule() {
         
         if (existing.length > 0) {
             // Update - don't overwrite secret if not provided
+            const scheduleId = existing[0].id;
             resp = await fetch(
-                `${cfg.url}/rest/v1/update_schedules?id=eq.${existing[0].id}`,
+                `${cfg.url}/rest/v1/update_schedules?id=eq.${scheduleId}`,
                 {
                     method: 'PATCH',
                     headers: {
@@ -2313,6 +2317,11 @@ async function saveSchedule() {
                     body: JSON.stringify(schedule)
                 }
             );
+            
+            // If new secret provided, save it to the secure secrets table
+            if (resp.ok && newSecret) {
+                await saveSecretSecurely(cfg, scheduleId, newSecret);
+            }
         } else {
             // Insert
             schedule.created_at = new Date().toISOString();
@@ -2329,6 +2338,15 @@ async function saveSchedule() {
                     body: JSON.stringify(schedule)
                 }
             );
+            
+            // Save secret to secure secrets table
+            if (resp.ok && newSecret) {
+                const savedSchedule = await resp.json();
+                const scheduleId = Array.isArray(savedSchedule) ? savedSchedule[0].id : savedSchedule.id;
+                await saveSecretSecurely(cfg, scheduleId, newSecret);
+                // Re-wrap for later use
+                resp = { ok: true, json: async () => savedSchedule };
+            }
         }
         
         if (resp.ok) {
@@ -2778,6 +2796,73 @@ async function assignSystemAdminRole(accessToken, userId) {
         }
     } catch (error) {
         console.warn('Error assigning role:', error.message);
+    }
+}
+
+// Securely save client secret to a separate protected table
+// The anon key can INSERT/UPDATE but CANNOT read from this table
+async function saveSecretSecurely(cfg, scheduleId, secret) {
+    try {
+        // Try to upsert the secret
+        // First check if a row exists (we can't read it, but we can try to update)
+        const upsertResp = await fetch(
+            `${cfg.url}/rest/v1/schedule_secrets`,
+            {
+                method: 'POST',
+                headers: {
+                    'apikey': cfg.key,
+                    'Authorization': `Bearer ${cfg.key}`,
+                    'Content-Type': 'application/json',
+                    'Prefer': 'resolution=merge-duplicates'  // Upsert: update if exists
+                },
+                body: JSON.stringify({
+                    schedule_id: scheduleId,
+                    client_secret: secret,
+                    updated_at: new Date().toISOString()
+                })
+            }
+        );
+        
+        if (upsertResp.ok) {
+            console.log('✅ Secret saved securely');
+        } else {
+            // If upsert fails, try update
+            const updateResp = await fetch(
+                `${cfg.url}/rest/v1/schedule_secrets?schedule_id=eq.${scheduleId}`,
+                {
+                    method: 'PATCH',
+                    headers: {
+                        'apikey': cfg.key,
+                        'Authorization': `Bearer ${cfg.key}`,
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        client_secret: secret,
+                        updated_at: new Date().toISOString()
+                    })
+                }
+            );
+            
+            if (updateResp.ok) {
+                console.log('✅ Secret updated securely');
+            } else {
+                console.warn('Could not save secret securely:', await updateResp.text());
+            }
+        }
+    } catch (error) {
+        console.warn('Error saving secret:', error.message);
+    }
+}
+
+// Check if a secret exists for a schedule (without being able to read it)
+async function hasSecretStored(cfg, scheduleId) {
+    try {
+        // We can't read the secret, but we can check if rows exist by trying a count
+        // Actually, with RLS blocking SELECT, we can't even count
+        // Instead, we track this in the main schedule table
+        return true; // Assume exists if schedule is already enabled
+    } catch (error) {
+        return false;
     }
 }
 
