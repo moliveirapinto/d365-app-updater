@@ -2288,12 +2288,49 @@ async function saveSchedule() {
             const saved = await resp.json();
             updateScheduleStatus(Array.isArray(saved) ? saved[0] : saved);
             
-            showModal({
-                title: 'Schedule Saved',
-                message: 'Your auto-update schedule has been saved. Updates will run automatically at the scheduled time.',
-                type: 'success',
-                confirmOnly: true
-            });
+            // If scheduling is enabled, set up the app registration automatically
+            if (schedule.enabled && schedule.client_id) {
+                saveBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Setting up permissions...';
+                
+                const setupResult = await setupAppRegistration(schedule.client_id);
+                
+                if (setupResult.success) {
+                    let message = 'Your auto-update schedule has been saved.';
+                    if (setupResult.permissionsAdded) {
+                        message += '<br><br>✅ Dynamics CRM permission added to your app registration.';
+                    }
+                    if (setupResult.appUserCreated) {
+                        message += '<br>✅ Application user created in Dataverse.';
+                    }
+                    message += '<br><br>Updates will run automatically at the scheduled time.';
+                    
+                    showModal({
+                        title: 'Schedule Saved',
+                        message: message,
+                        type: 'success',
+                        confirmOnly: true
+                    });
+                } else {
+                    showModal({
+                        title: 'Schedule Saved (Manual Setup Needed)',
+                        message: `Your schedule has been saved, but automatic setup failed:<br><br>
+                            <strong>${setupResult.error}</strong><br><br>
+                            Please manually:<br>
+                            1. Add "Dynamics CRM → user_impersonation" permission to your app<br>
+                            2. Grant admin consent<br>
+                            3. Create an Application User in Power Platform Admin Center`,
+                        type: 'warning',
+                        confirmOnly: true
+                    });
+                }
+            } else {
+                showModal({
+                    title: 'Schedule Saved',
+                    message: 'Your auto-update schedule has been saved. Updates will run automatically at the scheduled time.',
+                    type: 'success',
+                    confirmOnly: true
+                });
+            }
         } else {
             const errorText = await resp.text();
             console.error('Failed to save schedule:', errorText);
@@ -2305,6 +2342,393 @@ async function saveSchedule() {
     } finally {
         saveBtn.disabled = false;
         saveBtn.innerHTML = originalText;
+    }
+}
+
+// ── Automatic App Registration Setup ─────────────────────────────────
+// Dynamics CRM API Resource ID (constant across all tenants)
+const DYNAMICS_CRM_RESOURCE_ID = '00000007-0000-0000-c000-000000000000';
+// user_impersonation scope ID for Dynamics CRM
+const USER_IMPERSONATION_SCOPE_ID = '78ce3f0f-a1ce-49c2-8cde-64b5c0896db4';
+
+async function setupAppRegistration(clientId) {
+    // This function configures the user's app registration with required permissions
+    // and creates the Application User in Dataverse
+    
+    if (!msalInstance) {
+        console.warn('MSAL not initialized');
+        return { success: false, error: 'Not authenticated' };
+    }
+    
+    const accounts = msalInstance.getAllAccounts();
+    if (accounts.length === 0) {
+        return { success: false, error: 'No authenticated account' };
+    }
+    
+    try {
+        // Get Graph API token
+        const graphToken = await msalInstance.acquireTokenSilent({
+            scopes: ['https://graph.microsoft.com/Application.ReadWrite.All'],
+            account: accounts[0]
+        }).catch(async () => {
+            // Fallback to popup if silent fails
+            return await msalInstance.acquireTokenPopup({
+                scopes: ['https://graph.microsoft.com/Application.ReadWrite.All'],
+                account: accounts[0]
+            });
+        });
+        
+        if (!graphToken || !graphToken.accessToken) {
+            return { success: false, error: 'Could not get Graph API permission. Please grant admin consent.' };
+        }
+        
+        console.log('Got Graph API token, configuring app registration...');
+        
+        // Step 1: Find the app registration by client ID
+        const appResp = await fetch(
+            `https://graph.microsoft.com/v1.0/applications?$filter=appId eq '${clientId}'`,
+            {
+                headers: {
+                    'Authorization': `Bearer ${graphToken.accessToken}`
+                }
+            }
+        );
+        
+        if (!appResp.ok) {
+            const errText = await appResp.text();
+            console.error('Failed to find app registration:', errText);
+            return { success: false, error: 'Could not find app registration. Make sure you have Application.ReadWrite.All permission.' };
+        }
+        
+        const appData = await appResp.json();
+        if (!appData.value || appData.value.length === 0) {
+            return { success: false, error: `App registration with ID ${clientId} not found in your tenant.` };
+        }
+        
+        const app = appData.value[0];
+        const appObjectId = app.id;
+        console.log('Found app registration:', app.displayName, 'Object ID:', appObjectId);
+        
+        // Step 2: Check if Dynamics CRM permission already exists
+        const existingPermissions = app.requiredResourceAccess || [];
+        const hasDynamicsCRM = existingPermissions.some(
+            ra => ra.resourceAppId === DYNAMICS_CRM_RESOURCE_ID &&
+                  ra.resourceAccess.some(a => a.id === USER_IMPERSONATION_SCOPE_ID)
+        );
+        
+        if (!hasDynamicsCRM) {
+            console.log('Adding Dynamics CRM user_impersonation permission...');
+            
+            // Add Dynamics CRM permission
+            const newPermissions = [...existingPermissions];
+            const dynamicsCrmEntry = newPermissions.find(ra => ra.resourceAppId === DYNAMICS_CRM_RESOURCE_ID);
+            
+            if (dynamicsCrmEntry) {
+                // Add scope to existing entry
+                if (!dynamicsCrmEntry.resourceAccess.some(a => a.id === USER_IMPERSONATION_SCOPE_ID)) {
+                    dynamicsCrmEntry.resourceAccess.push({
+                        id: USER_IMPERSONATION_SCOPE_ID,
+                        type: 'Scope'
+                    });
+                }
+            } else {
+                // Add new entry for Dynamics CRM
+                newPermissions.push({
+                    resourceAppId: DYNAMICS_CRM_RESOURCE_ID,
+                    resourceAccess: [{
+                        id: USER_IMPERSONATION_SCOPE_ID,
+                        type: 'Scope'
+                    }]
+                });
+            }
+            
+            // Update the app registration
+            const updateResp = await fetch(
+                `https://graph.microsoft.com/v1.0/applications/${appObjectId}`,
+                {
+                    method: 'PATCH',
+                    headers: {
+                        'Authorization': `Bearer ${graphToken.accessToken}`,
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        requiredResourceAccess: newPermissions
+                    })
+                }
+            );
+            
+            if (!updateResp.ok) {
+                const errText = await updateResp.text();
+                console.error('Failed to update app permissions:', errText);
+                return { success: false, error: 'Could not add Dynamics CRM permission. You may need to add it manually.' };
+            }
+            
+            console.log('✅ Dynamics CRM permission added to app registration');
+        } else {
+            console.log('✅ Dynamics CRM permission already exists');
+        }
+        
+        // Step 3: Grant admin consent (requires Directory.ReadWrite.All or admin privileges)
+        // This creates a service principal if it doesn't exist and grants consent
+        try {
+            await grantAdminConsent(graphToken.accessToken, clientId);
+        } catch (consentError) {
+            console.warn('Admin consent may need to be granted manually:', consentError.message);
+        }
+        
+        // Step 4: Create Application User in Dataverse
+        const appUserResult = await createApplicationUser(clientId);
+        
+        return { 
+            success: true, 
+            permissionsAdded: !hasDynamicsCRM,
+            appUserCreated: appUserResult.success,
+            appUserMessage: appUserResult.message
+        };
+        
+    } catch (error) {
+        console.error('Setup error:', error);
+        return { success: false, error: error.message };
+    }
+}
+
+async function grantAdminConsent(graphToken, clientId) {
+    // First ensure the service principal exists
+    let spResp = await fetch(
+        `https://graph.microsoft.com/v1.0/servicePrincipals?$filter=appId eq '${clientId}'`,
+        {
+            headers: { 'Authorization': `Bearer ${graphToken}` }
+        }
+    );
+    
+    let spData = await spResp.json();
+    let servicePrincipalId;
+    
+    if (!spData.value || spData.value.length === 0) {
+        // Create service principal
+        const createSpResp = await fetch(
+            'https://graph.microsoft.com/v1.0/servicePrincipals',
+            {
+                method: 'POST',
+                headers: {
+                    'Authorization': `Bearer ${graphToken}`,
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ appId: clientId })
+            }
+        );
+        
+        if (createSpResp.ok) {
+            const newSp = await createSpResp.json();
+            servicePrincipalId = newSp.id;
+            console.log('✅ Service principal created:', servicePrincipalId);
+        } else {
+            throw new Error('Could not create service principal');
+        }
+    } else {
+        servicePrincipalId = spData.value[0].id;
+    }
+    
+    // Get Dynamics CRM service principal
+    const crmSpResp = await fetch(
+        `https://graph.microsoft.com/v1.0/servicePrincipals?$filter=appId eq '${DYNAMICS_CRM_RESOURCE_ID}'`,
+        {
+            headers: { 'Authorization': `Bearer ${graphToken}` }
+        }
+    );
+    
+    const crmSpData = await crmSpResp.json();
+    if (!crmSpData.value || crmSpData.value.length === 0) {
+        console.warn('Dynamics CRM service principal not found - consent may need to be granted manually');
+        return;
+    }
+    
+    const crmServicePrincipalId = crmSpData.value[0].id;
+    
+    // Grant oauth2PermissionGrant (delegated permission consent)
+    const grantResp = await fetch(
+        'https://graph.microsoft.com/v1.0/oauth2PermissionGrants',
+        {
+            method: 'POST',
+            headers: {
+                'Authorization': `Bearer ${graphToken}`,
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                clientId: servicePrincipalId,
+                consentType: 'AllPrincipals',
+                resourceId: crmServicePrincipalId,
+                scope: 'user_impersonation'
+            })
+        }
+    );
+    
+    if (grantResp.ok || grantResp.status === 409) { // 409 = already exists
+        console.log('✅ Admin consent granted for Dynamics CRM');
+    } else {
+        const errText = await grantResp.text();
+        console.warn('Could not grant admin consent:', errText);
+    }
+}
+
+async function createApplicationUser(clientId) {
+    if (!currentOrgUrl || !msalInstance) {
+        return { success: false, message: 'Not connected to environment' };
+    }
+    
+    try {
+        const accounts = msalInstance.getAllAccounts();
+        if (accounts.length === 0) {
+            return { success: false, message: 'No authenticated account' };
+        }
+        
+        const tokenResponse = await msalInstance.acquireTokenSilent({
+            scopes: [`${currentOrgUrl}/.default`],
+            account: accounts[0]
+        });
+        
+        const accessToken = tokenResponse.accessToken;
+        
+        // Check if application user already exists
+        const checkUrl = `${currentOrgUrl}/api/data/v9.2/systemusers?$filter=applicationid eq ${clientId}&$select=systemuserid,fullname`;
+        const checkResp = await fetch(checkUrl, {
+            headers: {
+                'Authorization': `Bearer ${accessToken}`,
+                'OData-MaxVersion': '4.0',
+                'OData-Version': '4.0',
+                'Accept': 'application/json'
+            }
+        });
+        
+        if (checkResp.ok) {
+            const checkData = await checkResp.json();
+            if (checkData.value && checkData.value.length > 0) {
+                console.log('✅ Application user already exists:', checkData.value[0].fullname);
+                return { success: true, message: 'Application user already exists' };
+            }
+        }
+        
+        // Get root business unit
+        const buResp = await fetch(
+            `${currentOrgUrl}/api/data/v9.2/businessunits?$filter=parentbusinessunitid eq null&$select=businessunitid`,
+            {
+                headers: {
+                    'Authorization': `Bearer ${accessToken}`,
+                    'OData-MaxVersion': '4.0',
+                    'OData-Version': '4.0',
+                    'Accept': 'application/json'
+                }
+            }
+        );
+        
+        if (!buResp.ok) {
+            return { success: false, message: 'Could not get business unit' };
+        }
+        
+        const buData = await buResp.json();
+        if (!buData.value || buData.value.length === 0) {
+            return { success: false, message: 'No root business unit found' };
+        }
+        
+        const businessUnitId = buData.value[0].businessunitid;
+        
+        // Create the application user
+        const createResp = await fetch(`${currentOrgUrl}/api/data/v9.2/systemusers`, {
+            method: 'POST',
+            headers: {
+                'Authorization': `Bearer ${accessToken}`,
+                'OData-MaxVersion': '4.0',
+                'OData-Version': '4.0',
+                'Accept': 'application/json',
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                'applicationid': clientId,
+                'fullname': 'D365 App Updater Scheduler',
+                'internalemailaddress': `app-updater-${clientId.substring(0, 8)}@automation.local`,
+                'businessunitid@odata.bind': `/businessunits(${businessUnitId})`,
+                'accessmode': 4 // Non-interactive (application user)
+            })
+        });
+        
+        if (createResp.ok || createResp.status === 204) {
+            console.log('✅ Application user created successfully');
+            
+            // Get the created user ID and assign System Administrator role
+            const userUrl = createResp.headers.get('OData-EntityId');
+            if (userUrl) {
+                const userIdMatch = userUrl.match(/systemusers\(([^)]+)\)/);
+                if (userIdMatch) {
+                    const userId = userIdMatch[1];
+                    await assignSystemAdminRole(accessToken, userId);
+                }
+            }
+            
+            return { success: true, message: 'Application user created with System Administrator role' };
+        } else {
+            const errorText = await createResp.text();
+            console.error('Could not create application user:', createResp.status, errorText);
+            return { success: false, message: `Could not create application user: ${errorText}` };
+        }
+        
+    } catch (error) {
+        console.error('Error creating application user:', error);
+        return { success: false, message: error.message };
+    }
+}
+
+async function assignSystemAdminRole(accessToken, userId) {
+    try {
+        // Get the System Administrator role ID
+        const roleResp = await fetch(
+            `${currentOrgUrl}/api/data/v9.2/roles?$filter=name eq 'System Administrator'&$select=roleid`,
+            {
+                headers: {
+                    'Authorization': `Bearer ${accessToken}`,
+                    'OData-MaxVersion': '4.0',
+                    'OData-Version': '4.0',
+                    'Accept': 'application/json'
+                }
+            }
+        );
+        
+        if (!roleResp.ok) {
+            console.warn('Could not get System Administrator role');
+            return;
+        }
+        
+        const roleData = await roleResp.json();
+        if (!roleData.value || roleData.value.length === 0) {
+            console.warn('System Administrator role not found');
+            return;
+        }
+        
+        const roleId = roleData.value[0].roleid;
+        
+        // Associate the role with the user
+        const associateResp = await fetch(
+            `${currentOrgUrl}/api/data/v9.2/systemusers(${userId})/systemuserroles_association/$ref`,
+            {
+                method: 'POST',
+                headers: {
+                    'Authorization': `Bearer ${accessToken}`,
+                    'OData-MaxVersion': '4.0',
+                    'OData-Version': '4.0',
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({
+                    '@odata.id': `${currentOrgUrl}/api/data/v9.2/roles(${roleId})`
+                })
+            }
+        );
+        
+        if (associateResp.ok || associateResp.status === 204) {
+            console.log('✅ System Administrator role assigned');
+        } else {
+            console.warn('Could not assign role:', associateResp.status);
+        }
+    } catch (error) {
+        console.warn('Error assigning role:', error.message);
     }
 }
 
