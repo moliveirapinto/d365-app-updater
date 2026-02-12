@@ -2194,8 +2194,10 @@ async function loadSchedule() {
                 document.getElementById('scheduleTime').value = schedule.time_utc;
                 document.getElementById('scheduleTimezone').value = schedule.timezone || 'UTC';
                 // Don't auto-fill secret for security, just indicate it's set
+                const secretInput = document.getElementById('scheduleClientSecret');
                 if (schedule.client_secret) {
-                    document.getElementById('scheduleClientSecret').placeholder = '••••••••••••••••';
+                    secretInput.placeholder = '(secret already saved - leave blank to keep)';
+                    secretInput.value = ''; // Clear any value
                 }
                 document.getElementById('scheduleDetails').style.display = schedule.enabled ? 'block' : 'none';
                 updateScheduleStatus(schedule);
@@ -2263,23 +2265,20 @@ async function saveSchedule() {
         time_utc: document.getElementById('scheduleTime').value,
         timezone: document.getElementById('scheduleTimezone').value,
         client_id: getCurrentClientId(),
-        client_secret: document.getElementById('scheduleClientSecret').value.trim(),
         tenant_id: getCurrentTenantId(),
         updated_at: new Date().toISOString()
     };
     
-    // Validate credentials if scheduling is enabled
-    if (schedule.enabled && !schedule.client_secret) {
-        saveBtn.disabled = false;
-        saveBtn.innerHTML = originalText;
-        showError('Client Secret is required for scheduled updates.');
-        return;
+    // Only include client_secret if user entered a new one
+    const newSecret = document.getElementById('scheduleClientSecret').value.trim();
+    if (newSecret) {
+        schedule.client_secret = newSecret;
     }
     
     try {
         // Upsert: try to update first, then insert if not exists
         const checkResp = await fetch(
-            `${cfg.url}/rest/v1/update_schedules?user_email=eq.${encodeURIComponent(userEmail)}&environment_id=eq.${encodeURIComponent(envId)}&select=id`,
+            `${cfg.url}/rest/v1/update_schedules?user_email=eq.${encodeURIComponent(userEmail)}&environment_id=eq.${encodeURIComponent(envId)}&select=id,client_secret`,
             {
                 headers: {
                     'apikey': cfg.key,
@@ -2291,8 +2290,16 @@ async function saveSchedule() {
         const existing = await checkResp.json();
         let resp;
         
+        // Validate credentials - only require secret for new schedules or if none exists
+        if (schedule.enabled && !newSecret && (existing.length === 0 || !existing[0].client_secret)) {
+            saveBtn.disabled = false;
+            saveBtn.innerHTML = originalText;
+            showError('Client Secret is required for scheduled updates.');
+            return;
+        }
+        
         if (existing.length > 0) {
-            // Update
+            // Update - don't overwrite secret if not provided
             resp = await fetch(
                 `${cfg.url}/rest/v1/update_schedules?id=eq.${existing[0].id}`,
                 {
@@ -2328,8 +2335,8 @@ async function saveSchedule() {
             const saved = await resp.json();
             updateScheduleStatus(Array.isArray(saved) ? saved[0] : saved);
             
-            // If scheduling is enabled, set up the app registration automatically
-            if (schedule.enabled && schedule.client_id) {
+            // If scheduling is enabled AND a new secret was provided, set up the app registration
+            if (schedule.enabled && schedule.client_id && newSecret) {
                 saveBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Setting up permissions...';
                 
                 const setupResult = await setupAppRegistration(schedule.client_id);
