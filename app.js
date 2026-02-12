@@ -2010,6 +2010,21 @@ function getCurrentUserEmail() {
     return null;
 }
 
+function getCurrentClientId() {
+    // Get the client ID from stored credentials (used at login)
+    const savedCreds = localStorage.getItem('d365_app_updater_creds') || 
+                       sessionStorage.getItem('d365_app_updater_creds');
+    if (savedCreds) {
+        try {
+            const creds = JSON.parse(savedCreds);
+            return creds.clientId || '';
+        } catch (e) {
+            console.warn('Could not parse saved credentials');
+        }
+    }
+    return '';
+}
+
 async function logUsage(successCount, failCount, appNames) {
     const cfg = getSupabaseConfig();
     if (!cfg) {
@@ -2152,7 +2167,6 @@ async function loadSchedule() {
                 document.getElementById('scheduleDay').value = schedule.day_of_week;
                 document.getElementById('scheduleTime').value = schedule.time_utc;
                 document.getElementById('scheduleTimezone').value = schedule.timezone || 'UTC';
-                document.getElementById('scheduleClientId').value = schedule.client_id || '';
                 // Don't auto-fill secret for security, just indicate it's set
                 if (schedule.client_secret) {
                     document.getElementById('scheduleClientSecret').placeholder = '••••••••••••••••';
@@ -2222,17 +2236,17 @@ async function saveSchedule() {
         day_of_week: parseInt(document.getElementById('scheduleDay').value, 10),
         time_utc: document.getElementById('scheduleTime').value,
         timezone: document.getElementById('scheduleTimezone').value,
-        client_id: document.getElementById('scheduleClientId').value.trim(),
+        client_id: getCurrentClientId(),
         client_secret: document.getElementById('scheduleClientSecret').value.trim(),
         tenant_id: tenantId || '',
         updated_at: new Date().toISOString()
     };
     
     // Validate credentials if scheduling is enabled
-    if (schedule.enabled && (!schedule.client_id || !schedule.client_secret)) {
+    if (schedule.enabled && !schedule.client_secret) {
         saveBtn.disabled = false;
         saveBtn.innerHTML = originalText;
-        showError('Client ID and Client Secret are required for scheduled updates.');
+        showError('Client Secret is required for scheduled updates.');
         return;
     }
     
