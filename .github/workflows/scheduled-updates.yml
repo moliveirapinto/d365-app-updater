@@ -24,9 +24,6 @@ jobs:
       - name: Process schedules
         env:
           SCHEDULES: ${{ steps.get-schedules.outputs.schedules }}
-          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
-          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
-          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
           SUPABASE_URL: https://fpekzltxukikaixebeeu.supabase.co
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
         run: |
@@ -51,16 +48,27 @@ jobs:
             USER_EMAIL=$(echo $schedule | jq -r '.user_email')
             SCHEDULE_ID=$(echo $schedule | jq -r '.id')
             
+            # Get per-user credentials from schedule
+            USER_CLIENT_ID=$(echo $schedule | jq -r '.client_id // empty')
+            USER_CLIENT_SECRET=$(echo $schedule | jq -r '.client_secret // empty')
+            USER_TENANT_ID=$(echo $schedule | jq -r '.tenant_id // empty')
+            
             echo "Checking schedule $SCHEDULE_ID: Day $SCHEDULE_DAY at $SCHEDULE_TIME for $ORG_URL"
+            
+            # Validate credentials
+            if [ -z "$USER_CLIENT_ID" ] || [ -z "$USER_CLIENT_SECRET" ]; then
+              echo "⚠️ Schedule $SCHEDULE_ID missing credentials, skipping"
+              continue
+            fi
             
             # Check if schedule matches current time
             if [ "$SCHEDULE_DAY" = "$CURRENT_DAY" ] && [ "$SCHEDULE_TIME" = "$CURRENT_HOUR" ]; then
               echo "✅ Schedule matches! Processing updates for $ORG_URL"
               
-              # Get access token
-              TOKEN_RESPONSE=$(curl -s -X POST "https://login.microsoftonline.com/$AZURE_TENANT_ID/oauth2/v2.0/token" \
+              # Get access token using per-user credentials
+              TOKEN_RESPONSE=$(curl -s -X POST "https://login.microsoftonline.com/${USER_TENANT_ID}/oauth2/v2.0/token" \
                 -H "Content-Type: application/x-www-form-urlencoded" \
-                -d "client_id=$AZURE_CLIENT_ID&client_secret=$AZURE_CLIENT_SECRET&grant_type=client_credentials&scope=${ORG_URL}/.default")
+                -d "client_id=${USER_CLIENT_ID}&client_secret=${USER_CLIENT_SECRET}&grant_type=client_credentials&scope=${ORG_URL}/.default")
               
               ACCESS_TOKEN=$(echo $TOKEN_RESPONSE | jq -r '.access_token')
               

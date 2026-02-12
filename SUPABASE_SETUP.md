@@ -64,6 +64,9 @@ CREATE TABLE update_schedules (
     day_of_week     INTEGER CHECK (day_of_week >= 0 AND day_of_week <= 6), -- 0=Sunday, 6=Saturday
     time_utc        TEXT DEFAULT '03:00', -- HH:MM format in UTC
     timezone        TEXT DEFAULT 'UTC',
+    client_id       TEXT,              -- Azure AD App Registration Client ID
+    client_secret   TEXT,              -- Azure AD App Registration Client Secret
+    tenant_id       TEXT,              -- Azure AD Tenant ID
     last_run_at     TIMESTAMPTZ,
     last_run_status TEXT,
     last_run_result JSONB,
@@ -95,6 +98,15 @@ CREATE POLICY "Allow anonymous reads"
     ON update_schedules FOR SELECT
     TO anon
     USING (true);
+```
+
+### If you already have the table, add the new columns:
+
+```sql
+ALTER TABLE update_schedules 
+ADD COLUMN IF NOT EXISTS client_id TEXT,
+ADD COLUMN IF NOT EXISTS client_secret TEXT,
+ADD COLUMN IF NOT EXISTS tenant_id TEXT;
 ```
 
 ## 3. Get Your Project URL and Key

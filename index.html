@@ -447,6 +447,43 @@
             background: #9ca3af;
             cursor: not-allowed;
         }
+        .schedule-credentials {
+            margin-bottom: 0.5rem;
+        }
+        .schedule-input-row {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            margin-bottom: 0.5rem;
+        }
+        .schedule-input-row label {
+            min-width: 90px;
+        }
+        .schedule-input {
+            flex: 1;
+            padding: 0.5rem 0.75rem;
+            border: 1px solid #d1d5db;
+            border-radius: 6px;
+            font-size: 0.875rem;
+            font-family: monospace;
+            max-width: 350px;
+        }
+        .schedule-input:focus {
+            border-color: #0078d4;
+            outline: none;
+            box-shadow: 0 0 0 3px rgba(0, 120, 212, 0.12);
+        }
+        .toggle-secret-btn {
+            background: none;
+            border: 1px solid #d1d5db;
+            border-radius: 6px;
+            padding: 0.5rem 0.75rem;
+            cursor: pointer;
+            color: #6b7280;
+        }
+        .toggle-secret-btn:hover {
+            background: #f3f4f6;
+        }
         /* Custom Modal */
         .modal-overlay {
             position: fixed;
@@ -763,6 +800,24 @@
                         </label>
                     </div>
                     <div class="schedule-details" id="scheduleDetails" style="display: none;">
+                        <div class="schedule-credentials">
+                            <p style="font-size: 0.8rem; color: #6b7280; margin-bottom: 10px;">
+                                <i class="fas fa-info-circle"></i> You need an App Registration in your Azure AD tenant. 
+                                <a href="#" onclick="showCredentialsHelp(); return false;" style="color: #4f46e5;">How to create one</a>
+                            </p>
+                            <div class="schedule-input-row">
+                                <label style="font-size: 0.875rem; color: #374151;">Client ID:</label>
+                                <input type="text" id="scheduleClientId" class="schedule-input" placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx">
+                            </div>
+                            <div class="schedule-input-row">
+                                <label style="font-size: 0.875rem; color: #374151;">Client Secret:</label>
+                                <input type="password" id="scheduleClientSecret" class="schedule-input" placeholder="Enter client secret">
+                                <button type="button" class="toggle-secret-btn" onclick="toggleSecretVisibility()">
+                                    <i class="fas fa-eye" id="secretToggleIcon"></i>
+                                </button>
+                            </div>
+                        </div>
+                        <hr style="border: none; border-top: 1px solid #e5e7eb; margin: 15px 0;">
                         <div class="schedule-row">
                             <label style="font-size: 0.875rem; color: #374151;">Run updates every</label>
                             <select id="scheduleDay" class="schedule-select">

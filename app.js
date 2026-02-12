@@ -2072,6 +2072,56 @@ function handleScheduleToggle() {
     }
 }
 
+function toggleSecretVisibility() {
+    const secretInput = document.getElementById('scheduleClientSecret');
+    const icon = document.getElementById('secretToggleIcon');
+    if (secretInput.type === 'password') {
+        secretInput.type = 'text';
+        icon.className = 'fas fa-eye-slash';
+    } else {
+        secretInput.type = 'password';
+        icon.className = 'fas fa-eye';
+    }
+}
+
+function showCredentialsHelp() {
+    showModal({
+        title: 'How to Create an App Registration',
+        message: `<div style="text-align: left; font-size: 0.9rem;">
+<p><strong>1. Go to Azure Portal</strong><br>
+Navigate to <a href="https://portal.azure.com/#blade/Microsoft_AAD_RegisteredApps/ApplicationsListBlade" target="_blank">Azure AD App Registrations</a></p>
+
+<p><strong>2. Create New Registration</strong><br>
+- Click "New registration"<br>
+- Name: "D365 App Updater"<br>
+- Account type: "Single tenant"<br>
+- Click "Register"</p>
+
+<p><strong>3. Copy the Client ID</strong><br>
+Copy the "Application (client) ID" from the Overview page</p>
+
+<p><strong>4. Create a Client Secret</strong><br>
+- Go to "Certificates & secrets"<br>
+- Click "New client secret"<br>
+- Add a description and expiry<br>
+- Copy the secret value immediately</p>
+
+<p><strong>5. Add API Permissions</strong><br>
+- Go to "API permissions"<br>
+- Add "Dynamics CRM" → "user_impersonation"<br>
+- Click "Grant admin consent"</p>
+
+<p><strong>6. Create Application User in Power Platform</strong><br>
+- Go to <a href="https://admin.powerplatform.microsoft.com" target="_blank">Power Platform Admin Center</a><br>
+- Select your environment → Settings → Users<br>
+- Create Application User with the Client ID<br>
+- Assign "System Administrator" role</p>
+</div>`,
+        type: 'info',
+        confirmOnly: true
+    });
+}
+
 async function loadSchedule() {
     if (scheduleLoaded) return;
     
@@ -2102,6 +2152,11 @@ async function loadSchedule() {
                 document.getElementById('scheduleDay').value = schedule.day_of_week;
                 document.getElementById('scheduleTime').value = schedule.time_utc;
                 document.getElementById('scheduleTimezone').value = schedule.timezone || 'UTC';
+                document.getElementById('scheduleClientId').value = schedule.client_id || '';
+                // Don't auto-fill secret for security, just indicate it's set
+                if (schedule.client_secret) {
+                    document.getElementById('scheduleClientSecret').placeholder = '••••••••••••••••';
+                }
                 document.getElementById('scheduleDetails').style.display = schedule.enabled ? 'block' : 'none';
                 updateScheduleStatus(schedule);
             }
@@ -2167,8 +2222,19 @@ async function saveSchedule() {
         day_of_week: parseInt(document.getElementById('scheduleDay').value, 10),
         time_utc: document.getElementById('scheduleTime').value,
         timezone: document.getElementById('scheduleTimezone').value,
+        client_id: document.getElementById('scheduleClientId').value.trim(),
+        client_secret: document.getElementById('scheduleClientSecret').value.trim(),
+        tenant_id: tenantId || '',
         updated_at: new Date().toISOString()
     };
+    
+    // Validate credentials if scheduling is enabled
+    if (schedule.enabled && (!schedule.client_id || !schedule.client_secret)) {
+        saveBtn.disabled = false;
+        saveBtn.innerHTML = originalText;
+        showError('Client ID and Client Secret are required for scheduled updates.');
+        return;
+    }
     
     try {
         // Upsert: try to update first, then insert if not exists
@@ -2222,11 +2288,6 @@ async function saveSchedule() {
             const saved = await resp.json();
             updateScheduleStatus(Array.isArray(saved) ? saved[0] : saved);
             
-            // If scheduling is enabled, ensure the automation service principal is set up
-            if (schedule.enabled) {
-                await ensureAutomationServicePrincipal();
-            }
-            
             showModal({
                 title: 'Schedule Saved',
                 message: 'Your auto-update schedule has been saved. Updates will run automatically at the scheduled time.',
@@ -2244,172 +2305,6 @@ async function saveSchedule() {
     } finally {
         saveBtn.disabled = false;
         saveBtn.innerHTML = originalText;
-    }
-}
-
-// Service Principal ID for automation (used by GitHub Actions scheduler)
-const AUTOMATION_SERVICE_PRINCIPAL_ID = 'bb11c6bc-7cb5-4478-b134-fb06e35a188e';
-
-async function ensureAutomationServicePrincipal() {
-    // Check if the automation service principal exists as an application user
-    // If not, create it with System Administrator role
-    
-    if (!currentOrgUrl || !msalInstance) {
-        console.log('Cannot set up automation: not connected to environment');
-        return;
-    }
-    
-    try {
-        // Get access token for Dataverse
-        const accounts = msalInstance.getAllAccounts();
-        if (accounts.length === 0) return;
-        
-        const tokenRequest = {
-            scopes: [`${currentOrgUrl}/.default`],
-            account: accounts[0]
-        };
-        
-        const tokenResponse = await msalInstance.acquireTokenSilent(tokenRequest);
-        const accessToken = tokenResponse.accessToken;
-        
-        // Check if application user already exists
-        const checkUrl = `${currentOrgUrl}/api/data/v9.2/systemusers?$filter=applicationid eq ${AUTOMATION_SERVICE_PRINCIPAL_ID}&$select=systemuserid,fullname`;
-        const checkResp = await fetch(checkUrl, {
-            headers: {
-                'Authorization': `Bearer ${accessToken}`,
-                'OData-MaxVersion': '4.0',
-                'OData-Version': '4.0',
-                'Accept': 'application/json'
-            }
-        });
-        
-        if (!checkResp.ok) {
-            console.warn('Could not check for existing application user:', checkResp.status);
-            return;
-        }
-        
-        const checkData = await checkResp.json();
-        
-        if (checkData.value && checkData.value.length > 0) {
-            console.log('Automation service principal already exists as application user:', checkData.value[0].fullname);
-            return; // Already exists, nothing to do
-        }
-        
-        // Application user doesn't exist, create it
-        console.log('Creating automation application user...');
-        
-        // Get the business unit ID (required for creating users)
-        const buResp = await fetch(`${currentOrgUrl}/api/data/v9.2/businessunits?$filter=parentbusinessunitid eq null&$select=businessunitid`, {
-            headers: {
-                'Authorization': `Bearer ${accessToken}`,
-                'OData-MaxVersion': '4.0',
-                'OData-Version': '4.0',
-                'Accept': 'application/json'
-            }
-        });
-        
-        if (!buResp.ok) {
-            console.warn('Could not get business unit:', buResp.status);
-            return;
-        }
-        
-        const buData = await buResp.json();
-        if (!buData.value || buData.value.length === 0) {
-            console.warn('No root business unit found');
-            return;
-        }
-        
-        const businessUnitId = buData.value[0].businessunitid;
-        
-        // Create the application user
-        const createResp = await fetch(`${currentOrgUrl}/api/data/v9.2/systemusers`, {
-            method: 'POST',
-            headers: {
-                'Authorization': `Bearer ${accessToken}`,
-                'OData-MaxVersion': '4.0',
-                'OData-Version': '4.0',
-                'Accept': 'application/json',
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({
-                'applicationid': AUTOMATION_SERVICE_PRINCIPAL_ID,
-                'fullname': 'D365 App Updater Automation',
-                'internalemailaddress': 'd365-app-updater@automation.local',
-                'businessunitid@odata.bind': `/businessunits(${businessUnitId})`,
-                'accessmode': 4 // Non-interactive (application user)
-            })
-        });
-        
-        if (createResp.ok || createResp.status === 204) {
-            console.log('✅ Automation application user created successfully');
-            
-            // Get the created user ID from the response header
-            const userUrl = createResp.headers.get('OData-EntityId');
-            if (userUrl) {
-                const userIdMatch = userUrl.match(/systemusers\(([^)]+)\)/);
-                if (userIdMatch) {
-                    const userId = userIdMatch[1];
-                    await assignSystemAdminRole(accessToken, userId);
-                }
-            }
-        } else {
-            const errorText = await createResp.text();
-            console.warn('Could not create application user:', createResp.status, errorText);
-            // Don't show error to user - this is a non-blocking enhancement
-        }
-        
-    } catch (error) {
-        console.warn('Error setting up automation service principal:', error.message);
-        // Don't show error to user - scheduling will still work, admin just needs to set up manually
-    }
-}
-
-async function assignSystemAdminRole(accessToken, userId) {
-    try {
-        // Get the System Administrator role ID
-        const roleResp = await fetch(`${currentOrgUrl}/api/data/v9.2/roles?$filter=name eq 'System Administrator'&$select=roleid`, {
-            headers: {
-                'Authorization': `Bearer ${accessToken}`,
-                'OData-MaxVersion': '4.0',
-                'OData-Version': '4.0',
-                'Accept': 'application/json'
-            }
-        });
-        
-        if (!roleResp.ok) {
-            console.warn('Could not get System Administrator role');
-            return;
-        }
-        
-        const roleData = await roleResp.json();
-        if (!roleData.value || roleData.value.length === 0) {
-            console.warn('System Administrator role not found');
-            return;
-        }
-        
-        const roleId = roleData.value[0].roleid;
-        
-        // Associate the role with the user
-        const associateResp = await fetch(`${currentOrgUrl}/api/data/v9.2/systemusers(${userId})/systemuserroles_association/$ref`, {
-            method: 'POST',
-            headers: {
-                'Authorization': `Bearer ${accessToken}`,
-                'OData-MaxVersion': '4.0',
-                'OData-Version': '4.0',
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({
-                '@odata.id': `${currentOrgUrl}/api/data/v9.2/roles(${roleId})`
-            })
-        });
-        
-        if (associateResp.ok || associateResp.status === 204) {
-            console.log('✅ System Administrator role assigned to automation user');
-        } else {
-            console.warn('Could not assign role:', associateResp.status);
-        }
-    } catch (error) {
-        console.warn('Error assigning role:', error.message);
     }
 }
 
