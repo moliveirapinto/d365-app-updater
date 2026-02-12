@@ -1,0 +1,103 @@
+name: Scheduled App Updates
+
+on:
+  schedule:
+    # Run every hour at minute 5
+    - cron: '5 * * * *'
+  workflow_dispatch: # Allow manual trigger for testing
+
+jobs:
+  check-and-update:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Get enabled schedules from Supabase
+        id: get-schedules
+        run: |
+          RESPONSE=$(curl -s "https://fpekzltxukikaixebeeu.supabase.co/rest/v1/update_schedules?enabled=eq.true&select=*" \
+            -H "apikey: ${{ secrets.SUPABASE_KEY }}" \
+            -H "Authorization: Bearer ${{ secrets.SUPABASE_KEY }}")
+          
+          echo "schedules=$RESPONSE" >> $GITHUB_OUTPUT
+          echo "Found schedules: $RESPONSE"
+          
+      - name: Process schedules
+        env:
+          SCHEDULES: ${{ steps.get-schedules.outputs.schedules }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+          SUPABASE_URL: https://fpekzltxukikaixebeeu.supabase.co
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+        run: |
+          # Get current UTC day of week (0=Sunday) and hour
+          CURRENT_DAY=$(date -u +%w)
+          CURRENT_HOUR=$(date -u +%H):00
+          
+          echo "Current UTC: Day $CURRENT_DAY, Time $CURRENT_HOUR"
+          
+          # Check if schedules is empty or null
+          if [ -z "$SCHEDULES" ] || [ "$SCHEDULES" = "[]" ]; then
+            echo "No enabled schedules found"
+            exit 0
+          fi
+          
+          # Parse and process each schedule
+          echo "$SCHEDULES" | jq -c '.[]' 2>/dev/null | while read schedule; do
+            SCHEDULE_DAY=$(echo $schedule | jq -r '.day_of_week')
+            SCHEDULE_TIME=$(echo $schedule | jq -r '.time_utc')
+            ORG_URL=$(echo $schedule | jq -r '.org_url')
+            ENV_ID=$(echo $schedule | jq -r '.environment_id')
+            USER_EMAIL=$(echo $schedule | jq -r '.user_email')
+            SCHEDULE_ID=$(echo $schedule | jq -r '.id')
+            
+            echo "Checking schedule $SCHEDULE_ID: Day $SCHEDULE_DAY at $SCHEDULE_TIME for $ORG_URL"
+            
+            # Check if schedule matches current time
+            if [ "$SCHEDULE_DAY" = "$CURRENT_DAY" ] && [ "$SCHEDULE_TIME" = "$CURRENT_HOUR" ]; then
+              echo "✅ Schedule matches! Processing updates for $ORG_URL"
+              
+              # Get access token
+              TOKEN_RESPONSE=$(curl -s -X POST "https://login.microsoftonline.com/$AZURE_TENANT_ID/oauth2/v2.0/token" \
+                -H "Content-Type: application/x-www-form-urlencoded" \
+                -d "client_id=$AZURE_CLIENT_ID&client_secret=$AZURE_CLIENT_SECRET&grant_type=client_credentials&scope=${ORG_URL}/.default")
+              
+              ACCESS_TOKEN=$(echo $TOKEN_RESPONSE | jq -r '.access_token')
+              
+              if [ "$ACCESS_TOKEN" != "null" ] && [ -n "$ACCESS_TOKEN" ]; then
+                echo "🔑 Got access token, fetching apps with updates..."
+                
+                # Get apps with updates available
+                APPS_RESPONSE=$(curl -s "${ORG_URL}/api/data/v9.2/msdyn_solutioncomponentcountssummaries?\$filter=msdyn_componenttype%20eq%20300" \
+                  -H "Authorization: Bearer $ACCESS_TOKEN" \
+                  -H "OData-MaxVersion: 4.0" \
+                  -H "OData-Version: 4.0" \
+                  -H "Accept: application/json")
+                
+                echo "📦 Apps response received"
+                
+                # Update last_run status in Supabase
+                curl -s -X PATCH "${SUPABASE_URL}/rest/v1/update_schedules?id=eq.${SCHEDULE_ID}" \
+                  -H "apikey: $SUPABASE_KEY" \
+                  -H "Authorization: Bearer $SUPABASE_KEY" \
+                  -H "Content-Type: application/json" \
+                  -d "{\"last_run_at\": \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\", \"last_run_status\": \"success\"}"
+                
+                echo "✅ Updated schedule $SCHEDULE_ID status to success"
+              else
+                echo "❌ Failed to get access token for $ORG_URL"
+                echo "Token response: $TOKEN_RESPONSE"
+                
+                # Update status as failed
+                curl -s -X PATCH "${SUPABASE_URL}/rest/v1/update_schedules?id=eq.${SCHEDULE_ID}" \
+                  -H "apikey: $SUPABASE_KEY" \
+                  -H "Authorization: Bearer $SUPABASE_KEY" \
+                  -H "Content-Type: application/json" \
+                  -d "{\"last_run_at\": \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\", \"last_run_status\": \"failed\"}"
+              fi
+            else
+              echo "⏭️ Schedule $SCHEDULE_ID doesn't match current time, skipping"
+            fi
+          done
+          
+          echo "🎉 Done processing schedules"
