@@ -2145,7 +2145,7 @@ Find and click on your app (the one with the Client ID above)</p>
 - Click <strong>"Add"</strong></p>
 
 <p><strong>Step 3: Copy the Secret Value</strong><br>
-<span style="color: #dc2626;">⚠️ IMPORTANT: Copy the <strong>Value</strong> immediately!</span><br>
+<span style="color: #dc2626;">⚠️ IMPORTANT: Copy the <strong>Value</strong> key (not the Secret ID) immediately!</span><br>
 It will only be shown once. If you lose it, you'll need to create a new one.</p>
 
 <p><strong>Step 4: Paste Here and Save</strong><br>
