@@ -14,6 +14,7 @@ A web-based tool to manage and update Microsoft Dynamics 365 / Power Platform ap
 - ✅ **Session Management**: Persistent login across sessions
 - ✅ **Admin Dashboard**: Track usage analytics with Supabase
 - ✅ **Real-time Status**: Live update status tracking
+- ✅ **Scheduled Auto-Updates**: Configure automatic updates on a weekly schedule (requires Azure Function)
 
 ## 🚀 Getting Started
 
@@ -120,8 +121,27 @@ npx http-server -p 8000
 .
 ├── index.html          # Main HTML page
 ├── app.js             # JavaScript application logic
+├── azure-function/    # Azure Function for scheduled updates
 └── README.md          # This file
 ```
+
+## ⏰ Scheduled Auto-Updates (Optional)
+
+You can configure automatic weekly updates that run without user intervention. This requires:
+
+1. **Supabase** - Store schedule configurations (see [SUPABASE_SETUP.md](SUPABASE_SETUP.md))
+2. **Azure Function** - Backend service that executes updates on schedule
+
+### How it works
+
+1. In the app, toggle on "Auto-Update Schedule" and select your preferred day/time
+2. The schedule is saved to Supabase
+3. An Azure Function checks for due schedules every hour
+4. When a schedule is due, the function authenticates and updates all apps
+
+### Setup
+
+See [azure-function/README.md](azure-function/README.md) for detailed setup instructions.
 
 ## 🔒 Security Notes
 

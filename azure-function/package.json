@@ -1,0 +1,18 @@
+{
+    "name": "d365-app-updater-scheduler",
+    "version": "1.0.0",
+    "description": "Azure Function for scheduled D365 app updates",
+    "main": "src/functions/*.js",
+    "scripts": {
+        "start": "func start",
+        "test": "echo \"No tests specified\" && exit 0"
+    },
+    "dependencies": {
+        "@azure/functions": "^4.0.0",
+        "@azure/identity": "^4.0.0",
+        "node-fetch": "^3.3.0"
+    },
+    "engines": {
+        "node": ">=18.0.0"
+    }
+}

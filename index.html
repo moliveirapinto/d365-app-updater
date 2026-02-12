@@ -341,6 +341,112 @@
         #appsSection {
             padding: 2rem 0;
         }
+        /* Schedule Card */
+        .schedule-card {
+            background: linear-gradient(135deg, #f0f7ff 0%, #e8f4fd 100%);
+            border: 1px solid #cce4f7;
+            border-radius: 10px;
+            padding: 1rem 1.25rem;
+            margin-bottom: 1rem;
+        }
+        .schedule-card-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            cursor: pointer;
+        }
+        .schedule-card-header h6 {
+            margin: 0;
+            font-weight: 600;
+            color: #0078d4;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+        .schedule-toggle {
+            position: relative;
+            width: 48px;
+            height: 26px;
+        }
+        .schedule-toggle input {
+            opacity: 0;
+            width: 0;
+            height: 0;
+        }
+        .schedule-toggle .slider {
+            position: absolute;
+            cursor: pointer;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background-color: #ccc;
+            transition: 0.3s;
+            border-radius: 26px;
+        }
+        .schedule-toggle .slider:before {
+            position: absolute;
+            content: "";
+            height: 20px;
+            width: 20px;
+            left: 3px;
+            bottom: 3px;
+            background-color: white;
+            transition: 0.3s;
+            border-radius: 50%;
+        }
+        .schedule-toggle input:checked + .slider {
+            background-color: #0078d4;
+        }
+        .schedule-toggle input:checked + .slider:before {
+            transform: translateX(22px);
+        }
+        .schedule-details {
+            margin-top: 1rem;
+            padding-top: 1rem;
+            border-top: 1px solid #cce4f7;
+        }
+        .schedule-row {
+            display: flex;
+            gap: 1rem;
+            align-items: center;
+            flex-wrap: wrap;
+        }
+        .schedule-select {
+            padding: 0.5rem 0.75rem;
+            border: 1px solid #d1d5db;
+            border-radius: 6px;
+            font-size: 0.875rem;
+            background: white;
+        }
+        .schedule-select:focus {
+            border-color: #0078d4;
+            outline: none;
+            box-shadow: 0 0 0 3px rgba(0, 120, 212, 0.12);
+        }
+        .schedule-status {
+            font-size: 0.8rem;
+            color: #6b7280;
+            margin-top: 0.75rem;
+        }
+        .schedule-status.active {
+            color: #059669;
+        }
+        .schedule-save-btn {
+            background: #0078d4;
+            color: white;
+            border: none;
+            padding: 0.5rem 1rem;
+            border-radius: 6px;
+            font-size: 0.875rem;
+            font-weight: 500;
+            cursor: pointer;
+            transition: background 0.15s;
+        }
+        .schedule-save-btn:hover {
+            background: #106ebe;
+        }
+        .schedule-save-btn:disabled {
+            background: #9ca3af;
+            cursor: not-allowed;
+        }
         /* Custom Modal */
         .modal-overlay {
             position: fixed;
@@ -644,6 +750,75 @@
                         <button id="logoutBtn" class="btn btn-outline-danger">
                             <i class="fas fa-sign-out-alt"></i> Logout
                         </button>
+                    </div>
+                </div>
+
+                <!-- Auto-Update Schedule -->
+                <div class="schedule-card" id="scheduleCard">
+                    <div class="schedule-card-header" onclick="toggleScheduleDetails()">
+                        <h6><i class="fas fa-clock"></i> Auto-Update Schedule</h6>
+                        <label class="schedule-toggle" onclick="event.stopPropagation()">
+                            <input type="checkbox" id="scheduleEnabled" onchange="handleScheduleToggle()">
+                            <span class="slider"></span>
+                        </label>
+                    </div>
+                    <div class="schedule-details" id="scheduleDetails" style="display: none;">
+                        <div class="schedule-row">
+                            <label style="font-size: 0.875rem; color: #374151;">Run updates every</label>
+                            <select id="scheduleDay" class="schedule-select">
+                                <option value="0">Sunday</option>
+                                <option value="1">Monday</option>
+                                <option value="2">Tuesday</option>
+                                <option value="3">Wednesday</option>
+                                <option value="4">Thursday</option>
+                                <option value="5">Friday</option>
+                                <option value="6">Saturday</option>
+                            </select>
+                            <label style="font-size: 0.875rem; color: #374151;">at</label>
+                            <select id="scheduleTime" class="schedule-select">
+                                <option value="00:00">12:00 AM</option>
+                                <option value="01:00">1:00 AM</option>
+                                <option value="02:00">2:00 AM</option>
+                                <option value="03:00">3:00 AM</option>
+                                <option value="04:00">4:00 AM</option>
+                                <option value="05:00">5:00 AM</option>
+                                <option value="06:00">6:00 AM</option>
+                                <option value="07:00">7:00 AM</option>
+                                <option value="08:00">8:00 AM</option>
+                                <option value="09:00">9:00 AM</option>
+                                <option value="10:00">10:00 AM</option>
+                                <option value="11:00">11:00 AM</option>
+                                <option value="12:00">12:00 PM</option>
+                                <option value="13:00">1:00 PM</option>
+                                <option value="14:00">2:00 PM</option>
+                                <option value="15:00">3:00 PM</option>
+                                <option value="16:00">4:00 PM</option>
+                                <option value="17:00">5:00 PM</option>
+                                <option value="18:00">6:00 PM</option>
+                                <option value="19:00">7:00 PM</option>
+                                <option value="20:00">8:00 PM</option>
+                                <option value="21:00">9:00 PM</option>
+                                <option value="22:00">10:00 PM</option>
+                                <option value="23:00">11:00 PM</option>
+                            </select>
+                            <select id="scheduleTimezone" class="schedule-select">
+                                <option value="UTC">UTC</option>
+                                <option value="America/New_York">Eastern Time</option>
+                                <option value="America/Chicago">Central Time</option>
+                                <option value="America/Denver">Mountain Time</option>
+                                <option value="America/Los_Angeles">Pacific Time</option>
+                                <option value="Europe/London">London</option>
+                                <option value="Europe/Paris">Paris/Berlin</option>
+                                <option value="Asia/Tokyo">Tokyo</option>
+                                <option value="Australia/Sydney">Sydney</option>
+                            </select>
+                            <button class="schedule-save-btn" id="scheduleSaveBtn" onclick="saveSchedule()">
+                                <i class="fas fa-save"></i> Save Schedule
+                            </button>
+                        </div>
+                        <div class="schedule-status" id="scheduleStatus">
+                            <i class="fas fa-info-circle"></i> Schedule not configured
+                        </div>
                     </div>
                 </div>
 

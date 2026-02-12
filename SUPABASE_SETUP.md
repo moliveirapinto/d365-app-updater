@@ -50,6 +50,53 @@ CREATE POLICY "Allow anonymous reads"
 
 Click **Run** to execute.
 
+## 2b. Create the `update_schedules` Table (for Auto-Updates)
+
+If you want to enable the **Auto-Update Scheduling** feature, also run this SQL:
+
+```sql
+CREATE TABLE update_schedules (
+    id              BIGSERIAL PRIMARY KEY,
+    user_email      TEXT NOT NULL,
+    environment_id  TEXT NOT NULL,
+    org_url         TEXT,
+    enabled         BOOLEAN DEFAULT false,
+    day_of_week     INTEGER CHECK (day_of_week >= 0 AND day_of_week <= 6), -- 0=Sunday, 6=Saturday
+    time_utc        TEXT DEFAULT '03:00', -- HH:MM format in UTC
+    timezone        TEXT DEFAULT 'UTC',
+    last_run_at     TIMESTAMPTZ,
+    last_run_status TEXT,
+    last_run_result JSONB,
+    created_at      TIMESTAMPTZ DEFAULT now(),
+    updated_at      TIMESTAMPTZ DEFAULT now(),
+    UNIQUE(user_email, environment_id)
+);
+
+-- Indexes for efficient querying by the scheduler
+CREATE INDEX idx_schedules_enabled ON update_schedules (enabled) WHERE enabled = true;
+CREATE INDEX idx_schedules_user ON update_schedules (user_email);
+
+-- Enable Row Level Security
+ALTER TABLE update_schedules ENABLE ROW LEVEL SECURITY;
+
+-- Allow inserts and updates from anon key (users configuring their schedules)
+CREATE POLICY "Allow anonymous inserts"
+    ON update_schedules FOR INSERT
+    TO anon
+    WITH CHECK (true);
+
+CREATE POLICY "Allow anonymous updates"
+    ON update_schedules FOR UPDATE
+    TO anon
+    USING (true)
+    WITH CHECK (true);
+
+CREATE POLICY "Allow anonymous reads"
+    ON update_schedules FOR SELECT
+    TO anon
+    USING (true);
+```
+
 ## 3. Get Your Project URL and Key
 
 1. Go to **Settings** → **API** (left sidebar).

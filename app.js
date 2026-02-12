@@ -544,6 +544,9 @@ Your Azure AD app registration is missing required permissions.<br><br>
         document.getElementById('authSection').classList.add('hidden');
         document.getElementById('appsSection').classList.remove('hidden');
 
+        // Load schedule settings
+        loadSchedule();
+
         // Clean up temp credentials from sessionStorage
         sessionStorage.removeItem('d365_app_updater_creds_temp');
         
@@ -2044,6 +2047,225 @@ async function logUsage(successCount, failCount, appNames) {
         }
     } catch (error) {
         console.warn('Usage logging error (non-critical):', error.message);
+    }
+}
+
+// ── Auto-Update Scheduling (Supabase) ─────────────────────────────────
+let scheduleLoaded = false;
+
+function toggleScheduleDetails() {
+    const details = document.getElementById('scheduleDetails');
+    const enabled = document.getElementById('scheduleEnabled').checked;
+    if (enabled) {
+        details.style.display = details.style.display === 'none' ? 'block' : 'none';
+    }
+}
+
+function handleScheduleToggle() {
+    const enabled = document.getElementById('scheduleEnabled').checked;
+    const details = document.getElementById('scheduleDetails');
+    details.style.display = enabled ? 'block' : 'none';
+    
+    if (!enabled) {
+        // Disable schedule in Supabase
+        disableSchedule();
+    }
+}
+
+async function loadSchedule() {
+    if (scheduleLoaded) return;
+    
+    const cfg = getSupabaseConfig();
+    if (!cfg) return;
+    
+    const userEmail = getCurrentUserEmail();
+    const envId = environmentId || '';
+    
+    if (!userEmail || !envId) return;
+    
+    try {
+        const resp = await fetch(
+            `${cfg.url}/rest/v1/update_schedules?user_email=eq.${encodeURIComponent(userEmail)}&environment_id=eq.${encodeURIComponent(envId)}&select=*`,
+            {
+                headers: {
+                    'apikey': cfg.key,
+                    'Authorization': `Bearer ${cfg.key}`
+                }
+            }
+        );
+        
+        if (resp.ok) {
+            const schedules = await resp.json();
+            if (schedules.length > 0) {
+                const schedule = schedules[0];
+                document.getElementById('scheduleEnabled').checked = schedule.enabled;
+                document.getElementById('scheduleDay').value = schedule.day_of_week;
+                document.getElementById('scheduleTime').value = schedule.time_utc;
+                document.getElementById('scheduleTimezone').value = schedule.timezone || 'UTC';
+                document.getElementById('scheduleDetails').style.display = schedule.enabled ? 'block' : 'none';
+                updateScheduleStatus(schedule);
+            }
+        }
+        scheduleLoaded = true;
+    } catch (error) {
+        console.warn('Failed to load schedule:', error.message);
+    }
+}
+
+function updateScheduleStatus(schedule) {
+    const statusEl = document.getElementById('scheduleStatus');
+    if (!schedule || !schedule.enabled) {
+        statusEl.innerHTML = '<i class="fas fa-info-circle"></i> Schedule not configured';
+        statusEl.className = 'schedule-status';
+        return;
+    }
+    
+    const days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+    const dayName = days[schedule.day_of_week];
+    const timeDisplay = formatTimeDisplay(schedule.time_utc);
+    const lastRun = schedule.last_run_at ? new Date(schedule.last_run_at).toLocaleString() : 'Never';
+    
+    statusEl.innerHTML = `<i class="fas fa-check-circle"></i> Scheduled: Every <strong>${dayName}</strong> at <strong>${timeDisplay}</strong> (${schedule.timezone || 'UTC'})<br>
+        <small>Last run: ${lastRun}</small>`;
+    statusEl.className = 'schedule-status active';
+}
+
+function formatTimeDisplay(time24) {
+    const [hours, minutes] = time24.split(':');
+    const h = parseInt(hours, 10);
+    const ampm = h >= 12 ? 'PM' : 'AM';
+    const h12 = h % 12 || 12;
+    return `${h12}:${minutes} ${ampm}`;
+}
+
+async function saveSchedule() {
+    const cfg = getSupabaseConfig();
+    if (!cfg) {
+        showError('Scheduling requires Supabase configuration.');
+        return;
+    }
+    
+    const userEmail = getCurrentUserEmail();
+    const envId = environmentId || '';
+    const orgUrl = currentOrgUrl || '';
+    
+    if (!userEmail || !envId) {
+        showError('Please connect to an environment first.');
+        return;
+    }
+    
+    const saveBtn = document.getElementById('scheduleSaveBtn');
+    const originalText = saveBtn.innerHTML;
+    saveBtn.disabled = true;
+    saveBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Saving...';
+    
+    const schedule = {
+        user_email: userEmail,
+        environment_id: envId,
+        org_url: orgUrl,
+        enabled: document.getElementById('scheduleEnabled').checked,
+        day_of_week: parseInt(document.getElementById('scheduleDay').value, 10),
+        time_utc: document.getElementById('scheduleTime').value,
+        timezone: document.getElementById('scheduleTimezone').value,
+        updated_at: new Date().toISOString()
+    };
+    
+    try {
+        // Upsert: try to update first, then insert if not exists
+        const checkResp = await fetch(
+            `${cfg.url}/rest/v1/update_schedules?user_email=eq.${encodeURIComponent(userEmail)}&environment_id=eq.${encodeURIComponent(envId)}&select=id`,
+            {
+                headers: {
+                    'apikey': cfg.key,
+                    'Authorization': `Bearer ${cfg.key}`
+                }
+            }
+        );
+        
+        const existing = await checkResp.json();
+        let resp;
+        
+        if (existing.length > 0) {
+            // Update
+            resp = await fetch(
+                `${cfg.url}/rest/v1/update_schedules?id=eq.${existing[0].id}`,
+                {
+                    method: 'PATCH',
+                    headers: {
+                        'apikey': cfg.key,
+                        'Authorization': `Bearer ${cfg.key}`,
+                        'Content-Type': 'application/json',
+                        'Prefer': 'return=representation'
+                    },
+                    body: JSON.stringify(schedule)
+                }
+            );
+        } else {
+            // Insert
+            schedule.created_at = new Date().toISOString();
+            resp = await fetch(
+                `${cfg.url}/rest/v1/update_schedules`,
+                {
+                    method: 'POST',
+                    headers: {
+                        'apikey': cfg.key,
+                        'Authorization': `Bearer ${cfg.key}`,
+                        'Content-Type': 'application/json',
+                        'Prefer': 'return=representation'
+                    },
+                    body: JSON.stringify(schedule)
+                }
+            );
+        }
+        
+        if (resp.ok) {
+            const saved = await resp.json();
+            updateScheduleStatus(Array.isArray(saved) ? saved[0] : saved);
+            showModal({
+                title: 'Schedule Saved',
+                message: 'Your auto-update schedule has been saved. Updates will run automatically at the scheduled time.',
+                type: 'success',
+                confirmOnly: true
+            });
+        } else {
+            const errorText = await resp.text();
+            console.error('Failed to save schedule:', errorText);
+            showError('Failed to save schedule. Please try again.');
+        }
+    } catch (error) {
+        console.error('Schedule save error:', error);
+        showError('Failed to save schedule: ' + error.message);
+    } finally {
+        saveBtn.disabled = false;
+        saveBtn.innerHTML = originalText;
+    }
+}
+
+async function disableSchedule() {
+    const cfg = getSupabaseConfig();
+    if (!cfg) return;
+    
+    const userEmail = getCurrentUserEmail();
+    const envId = environmentId || '';
+    
+    if (!userEmail || !envId) return;
+    
+    try {
+        await fetch(
+            `${cfg.url}/rest/v1/update_schedules?user_email=eq.${encodeURIComponent(userEmail)}&environment_id=eq.${encodeURIComponent(envId)}`,
+            {
+                method: 'PATCH',
+                headers: {
+                    'apikey': cfg.key,
+                    'Authorization': `Bearer ${cfg.key}`,
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ enabled: false, updated_at: new Date().toISOString() })
+            }
+        );
+        updateScheduleStatus(null);
+    } catch (error) {
+        console.warn('Failed to disable schedule:', error.message);
     }
 }
 
