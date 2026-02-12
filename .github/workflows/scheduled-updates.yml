@@ -27,11 +27,11 @@ jobs:
           SUPABASE_URL: https://fpekzltxukikaixebeeu.supabase.co
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
         run: |
-          # Get current UTC day of week (0=Sunday) and hour
-          CURRENT_DAY=$(date -u +%w)
-          CURRENT_HOUR=$(date -u +%H):00
+          # Get current UTC time
+          CURRENT_UTC_DAY=$(date -u +%w)
+          CURRENT_UTC_HOUR=$(date -u +%H):00
           
-          echo "Current UTC: Day $CURRENT_DAY, Time $CURRENT_HOUR"
+          echo "Current UTC: Day $CURRENT_UTC_DAY, Time $CURRENT_UTC_HOUR"
           
           # Check if schedules is empty or null
           if [ -z "$SCHEDULES" ] || [ "$SCHEDULES" = "[]" ]; then
@@ -43,6 +43,7 @@ jobs:
           echo "$SCHEDULES" | jq -c '.[]' 2>/dev/null | while read schedule; do
             SCHEDULE_DAY=$(echo $schedule | jq -r '.day_of_week')
             SCHEDULE_TIME=$(echo $schedule | jq -r '.time_utc')
+            SCHEDULE_TZ=$(echo $schedule | jq -r '.timezone // "UTC"')
             ORG_URL=$(echo $schedule | jq -r '.org_url')
             ENV_ID=$(echo $schedule | jq -r '.environment_id')
             USER_EMAIL=$(echo $schedule | jq -r '.user_email')
@@ -53,7 +54,12 @@ jobs:
             USER_CLIENT_SECRET=$(echo $schedule | jq -r '.client_secret // empty')
             USER_TENANT_ID=$(echo $schedule | jq -r '.tenant_id // empty')
             
-            echo "Checking schedule $SCHEDULE_ID: Day $SCHEDULE_DAY at $SCHEDULE_TIME for $ORG_URL"
+            # Get current time in the schedule's timezone
+            CURRENT_LOCAL_DAY=$(TZ="$SCHEDULE_TZ" date +%w)
+            CURRENT_LOCAL_HOUR=$(TZ="$SCHEDULE_TZ" date +%H):00
+            
+            echo "Checking schedule $SCHEDULE_ID: Day $SCHEDULE_DAY at $SCHEDULE_TIME ($SCHEDULE_TZ)"
+            echo "  Current local time in $SCHEDULE_TZ: Day $CURRENT_LOCAL_DAY, Time $CURRENT_LOCAL_HOUR"
             
             # Validate credentials
             if [ -z "$USER_CLIENT_ID" ] || [ -z "$USER_CLIENT_SECRET" ]; then
@@ -61,8 +67,8 @@ jobs:
               continue
             fi
             
-            # Check if schedule matches current time
-            if [ "$SCHEDULE_DAY" = "$CURRENT_DAY" ] && [ "$SCHEDULE_TIME" = "$CURRENT_HOUR" ]; then
+            # Check if schedule matches current LOCAL time (in user's timezone)
+            if [ "$SCHEDULE_DAY" = "$CURRENT_LOCAL_DAY" ] && [ "$SCHEDULE_TIME" = "$CURRENT_LOCAL_HOUR" ]; then
               echo "✅ Schedule matches! Processing updates for $ORG_URL"
               
               # Get access token using per-user credentials
