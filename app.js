@@ -2100,37 +2100,41 @@ function toggleSecretVisibility() {
 }
 
 function showCredentialsHelp() {
+    const clientId = getCurrentClientId();
+    const clientIdDisplay = clientId ? `<code style="background:#e5e7eb; padding: 2px 6px; border-radius: 4px;">${clientId}</code>` : '(from your login)';
+    
     showModal({
-        title: 'How to Create an App Registration',
+        title: 'How to Create a Client Secret',
         message: `<div style="text-align: left; font-size: 0.9rem;">
-<p><strong>1. Go to Azure Portal</strong><br>
-Navigate to <a href="https://portal.azure.com/#blade/Microsoft_AAD_RegisteredApps/ApplicationsListBlade" target="_blank">Azure AD App Registrations</a></p>
+<p style="background: #f0f9ff; padding: 10px; border-radius: 6px; border-left: 3px solid #0078d4;">
+<strong>Your Client ID:</strong> ${clientIdDisplay}<br>
+<small>This is the App Registration you used to log in.</small>
+</p>
 
-<p><strong>2. Create New Registration</strong><br>
-- Click "New registration"<br>
-- Name: "D365 App Updater"<br>
-- Account type: "Single tenant"<br>
-- Click "Register"</p>
+<p><strong>Step 1: Open Your App Registration</strong><br>
+<a href="https://portal.azure.com/#blade/Microsoft_AAD_RegisteredApps/ApplicationsListBlade" target="_blank">Click here to open Azure App Registrations</a><br>
+Find and click on your app (the one with the Client ID above)</p>
 
-<p><strong>3. Copy the Client ID</strong><br>
-Copy the "Application (client) ID" from the Overview page</p>
+<p><strong>Step 2: Create a Client Secret</strong><br>
+- In the left menu, click <strong>"Certificates & secrets"</strong><br>
+- Click <strong>"+ New client secret"</strong><br>
+- Description: <code>Scheduler</code><br>
+- Expires: Choose 24 months (recommended)<br>
+- Click <strong>"Add"</strong></p>
 
-<p><strong>4. Create a Client Secret</strong><br>
-- Go to "Certificates & secrets"<br>
-- Click "New client secret"<br>
-- Add a description and expiry<br>
-- Copy the secret value immediately</p>
+<p><strong>Step 3: Copy the Secret Value</strong><br>
+<span style="color: #dc2626;">⚠️ IMPORTANT: Copy the <strong>Value</strong> immediately!</span><br>
+It will only be shown once. If you lose it, you'll need to create a new one.</p>
 
-<p><strong>5. Add API Permissions</strong><br>
-- Go to "API permissions"<br>
-- Add "Dynamics CRM" → "user_impersonation"<br>
-- Click "Grant admin consent"</p>
+<p><strong>Step 4: Paste Here and Save</strong><br>
+Paste the secret value in the field above and click "Save Schedule"</p>
 
-<p><strong>6. Create Application User in Power Platform</strong><br>
-- Go to <a href="https://admin.powerplatform.microsoft.com" target="_blank">Power Platform Admin Center</a><br>
-- Select your environment → Settings → Users<br>
-- Create Application User with the Client ID<br>
-- Assign "System Administrator" role</p>
+<hr style="margin: 15px 0;">
+<p style="color: #059669;"><strong>✅ What happens automatically:</strong><br>
+- API permissions are added to your app<br>
+- Admin consent is granted<br>
+- Application User is created in Dataverse<br>
+- System Administrator role is assigned</p>
 </div>`,
         type: 'info',
         confirmOnly: true
