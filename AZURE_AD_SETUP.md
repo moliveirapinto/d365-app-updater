@@ -80,8 +80,8 @@ After the app is created:
 1. Open your D365 App Updater application
 2. Enter:
    - **Organization URL**: Your D365 URL (e.g., `https://yourorg.crm.dynamics.com`)
-   - **Tenant ID**: The Directory (tenant) ID from step 5
    - **Client ID**: The Application (client) ID from step 5
+   - **Tenant ID** *(Optional)*: The Directory (tenant) ID from step 5 — leave empty to auto-detect
 3. Click **Connect to Power Platform**
 4. You should see a Microsoft login popup
 5. Sign in with your credentials

@@ -106,8 +106,8 @@ npx http-server -p 8000
 1. **Open the Application**: Navigate to your deployed URL or local server
 2. **Enter Credentials**:
    - Organization URL: `https://yourorg.crm.dynamics.com`
-   - Tenant ID: Your Azure AD Tenant ID (GUID)
    - Client ID: Your App Registration Client ID (GUID)
+   - Tenant ID: *(Optional)* Your Azure AD Tenant ID — leave empty to auto-detect during sign-in
 3. **Connect**: Click "Connect to Power Platform"
 4. **Authenticate**: Sign in with your Microsoft account in the popup
 5. **View Apps**: See all installed applications and their update status

@@ -95,8 +95,8 @@ npm start
 1. Open http://localhost:8000 in your browser
 2. Enter your credentials:
    - **Organization URL**: `https://yourorg.crm.dynamics.com`
-   - **Tenant ID**: [from step 1]
    - **Client ID**: [from step 1]
+   - **Tenant ID** *(Optional)*: [from step 1] — leave empty to auto-detect
 3. Click **"Connect to Power Platform"**
 4. Sign in when prompted
 5. View and update your apps! 🎉

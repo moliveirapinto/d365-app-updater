@@ -106,10 +106,14 @@ const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZ
 function createMsalConfig(tenantId, clientId) {
     // Compute redirect URI from current path (handles GitHub Pages subpaths like /d365-app-updater/)
     const pathDir = window.location.pathname.substring(0, window.location.pathname.lastIndexOf('/') + 1);
+    // Use 'organizations' endpoint if no tenant ID provided (allows any Azure AD account)
+    const authority = tenantId 
+        ? `https://login.microsoftonline.com/${tenantId}`
+        : 'https://login.microsoftonline.com/organizations';
     return {
         auth: {
             clientId: clientId,
-            authority: `https://login.microsoftonline.com/${tenantId}`,
+            authority: authority,
             redirectUri: window.location.origin + pathDir,
         },
         cache: {
@@ -371,7 +375,8 @@ Your Azure AD app registration is missing required permissions.<br><br>
     const tenantId = creds.tenantId || '';
     const clientId = creds.clientId || '';
     
-    if (!tenantId || !clientId || !orgUrlValue) {
+    // Tenant ID is optional - only Client ID and Org URL are required
+    if (!clientId || !orgUrlValue) {
         logWarn('Missing required credentials', { hasOrgUrl: !!orgUrlValue, hasTenantId: !!tenantId, hasClientId: !!clientId });
         return;
     }
@@ -635,9 +640,15 @@ async function handleAuthentication(event) {
     logInfo('Form values', { orgUrl: orgUrlValue, tenantId: tenantId.substring(0,8) + '...', clientId: clientId.substring(0,8) + '...', rememberMe });
     
     const guidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-    if (!guidRegex.test(tenantId) || !guidRegex.test(clientId)) {
-        logError('Invalid GUID format');
-        showError('Invalid GUID format. Tenant ID and Client ID must be valid GUIDs.');
+    // Tenant ID is optional - if provided, it must be a valid GUID
+    if (tenantId && !guidRegex.test(tenantId)) {
+        logError('Invalid Tenant ID GUID format');
+        showError('Invalid Tenant ID format. If provided, it must be a valid GUID.');
+        return;
+    }
+    if (!guidRegex.test(clientId)) {
+        logError('Invalid Client ID GUID format');
+        showError('Invalid Client ID format. Client ID must be a valid GUID.');
         return;
     }
     
