@@ -2025,6 +2025,28 @@ function getCurrentClientId() {
     return '';
 }
 
+function getCurrentTenantId() {
+    // Get the tenant ID from stored credentials or from MSAL account
+    const savedCreds = localStorage.getItem('d365_app_updater_creds') || 
+                       sessionStorage.getItem('d365_app_updater_creds');
+    if (savedCreds) {
+        try {
+            const creds = JSON.parse(savedCreds);
+            if (creds.tenantId) return creds.tenantId;
+        } catch (e) {
+            console.warn('Could not parse saved credentials for tenant');
+        }
+    }
+    // Fallback: get from MSAL account
+    if (msalInstance) {
+        const accounts = msalInstance.getAllAccounts();
+        if (accounts.length > 0 && accounts[0].tenantId) {
+            return accounts[0].tenantId;
+        }
+    }
+    return '';
+}
+
 async function logUsage(successCount, failCount, appNames) {
     const cfg = getSupabaseConfig();
     if (!cfg) {
@@ -2242,7 +2264,7 @@ async function saveSchedule() {
         timezone: document.getElementById('scheduleTimezone').value,
         client_id: getCurrentClientId(),
         client_secret: document.getElementById('scheduleClientSecret').value.trim(),
-        tenant_id: tenantId || '',
+        tenant_id: getCurrentTenantId(),
         updated_at: new Date().toISOString()
     };
     
