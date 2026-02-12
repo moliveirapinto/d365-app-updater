@@ -71,9 +71,7 @@ After the app is created:
 ## Step 5: Get Your Credentials
 
 1. Go to the **Overview** page of your app registration
-2. Copy these values (you'll need them in the app):
-   - **Application (client) ID**: Example: `12345678-1234-1234-1234-123456789abc`
-   - **Directory (tenant) ID**: Example: `87654321-4321-4321-4321-abcdef123456`
+2. Copy the **Application (client) ID**: Example: `12345678-1234-1234-1234-123456789abc`
 
 ## Step 6: Test the Configuration
 
@@ -81,7 +79,6 @@ After the app is created:
 2. Enter:
    - **Organization URL**: Your D365 URL (e.g., `https://yourorg.crm.dynamics.com`)
    - **Client ID**: The Application (client) ID from step 5
-   - **Tenant ID** *(Optional)*: The Directory (tenant) ID from step 5 — leave empty to auto-detect
 3. Click **Connect to Power Platform**
 4. You should see a Microsoft login popup
 5. Sign in with your credentials

@@ -66,7 +66,7 @@ A web-based tool to manage and update Microsoft Dynamics 365 / Power Platform ap
      - **BAP API** → user_impersonation
    - Click **"Grant admin consent for [Your Org]"** ⚠️ Required!
 
-6. Copy your **Application (client) ID** and **Directory (tenant) ID**
+6. Copy your **Application (client) ID**
 
 📖 **Detailed manual setup:** [AZURE_AD_SETUP.md](AZURE_AD_SETUP.md)
 
@@ -107,7 +107,6 @@ npx http-server -p 8000
 2. **Enter Credentials**:
    - Organization URL: `https://yourorg.crm.dynamics.com`
    - Client ID: Your App Registration Client ID (GUID)
-   - Tenant ID: *(Optional)* Your Azure AD Tenant ID — leave empty to auto-detect during sign-in
 3. **Connect**: Click "Connect to Power Platform"
 4. **Authenticate**: Sign in with your Microsoft account in the popup
 5. **View Apps**: See all installed applications and their update status

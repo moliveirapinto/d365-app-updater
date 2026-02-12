@@ -286,7 +286,6 @@ function loadSavedCredentials() {
             const creds = JSON.parse(savedCreds);
             const orgUrlEl = document.getElementById('orgUrl');
             if (orgUrlEl) orgUrlEl.value = creds.orgUrl || creds.organizationId || creds.environmentId || '';
-            document.getElementById('tenantId').value = creds.tenantId || '';
             document.getElementById('clientId').value = creds.clientId || '';
             document.getElementById('rememberMe').checked = true;
         } catch (e) {}
@@ -633,19 +632,13 @@ async function handleAuthentication(event) {
     logInfo('=== handleAuthentication START (user clicked Connect) ===');
     
     let orgUrlValue = document.getElementById('orgUrl').value.trim();
-    const tenantId = document.getElementById('tenantId').value.trim();
+    const tenantId = ''; // Tenant ID removed from UI - will use 'organizations' endpoint
     const clientId = document.getElementById('clientId').value.trim();
     const rememberMe = document.getElementById('rememberMe').checked;
     
-    logInfo('Form values', { orgUrl: orgUrlValue, tenantId: tenantId.substring(0,8) + '...', clientId: clientId.substring(0,8) + '...', rememberMe });
+    logInfo('Form values', { orgUrl: orgUrlValue, clientId: clientId.substring(0,8) + '...', rememberMe });
     
     const guidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-    // Tenant ID is optional - if provided, it must be a valid GUID
-    if (tenantId && !guidRegex.test(tenantId)) {
-        logError('Invalid Tenant ID GUID format');
-        showError('Invalid Tenant ID format. If provided, it must be a valid GUID.');
-        return;
-    }
     if (!guidRegex.test(clientId)) {
         logError('Invalid Client ID GUID format');
         showError('Invalid Client ID format. Client ID must be a valid GUID.');

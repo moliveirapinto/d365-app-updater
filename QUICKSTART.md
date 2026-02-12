@@ -62,7 +62,7 @@ Get up and running with D365 Power Platform App Updater in 5 minutes!
    - **Microsoft Graph** → User.Read
    - **BAP API** → user_impersonation
    - Click **"Grant admin consent for [Your Org]"** (IMPORTANT!)
-7. Copy your **Client ID** and **Tenant ID** from the Overview page
+7. Copy your **Client ID** from the Overview page
 
 📖 **Need detailed instructions?** See [AZURE_AD_SETUP.md](AZURE_AD_SETUP.md)
 
@@ -96,7 +96,6 @@ npm start
 2. Enter your credentials:
    - **Organization URL**: `https://yourorg.crm.dynamics.com`
    - **Client ID**: [from step 1]
-   - **Tenant ID** *(Optional)*: [from step 1] — leave empty to auto-detect
 3. Click **"Connect to Power Platform"**
 4. Sign in when prompted
 5. View and update your apps! 🎉
