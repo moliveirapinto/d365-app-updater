@@ -2105,7 +2105,7 @@ function showCredentialsHelp() {
     
     showModal({
         title: 'How to Create a Client Secret',
-        message: `<div style="text-align: left; font-size: 0.9rem;">
+        body: `<div style="text-align: left; font-size: 0.9rem;">
 <p style="background: #f0f9ff; padding: 10px; border-radius: 6px; border-left: 3px solid #0078d4;">
 <strong>Your Client ID:</strong> ${clientIdDisplay}<br>
 <small>This is the App Registration you used to log in.</small>
