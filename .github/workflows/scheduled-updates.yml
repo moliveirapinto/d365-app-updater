@@ -33,10 +33,24 @@ jobs:
           fi
           
           # Merge schedules with their secrets (compact to single line with -c)
-          MERGED=$(echo "$SCHEDULES" | jq -c --argjson secrets "$SECRETS" '
-            . as $schedules | 
-            (if $secrets == [] then {} else ($secrets | map({(.schedule_id | tostring): .client_secret}) | add) end) as $secretMap |
-            $schedules | map(. + (if $secretMap[.id | tostring] then {client_secret: $secretMap[.id | tostring]} else {} end))
+          # First try matching by schedule_id, then fallback to matching by client_id
+          MERGED=$(echo "$SCHEDULES" | jq -c --argjson secrets "$SECRETS" --argjson allSchedules "$SCHEDULES" '
+            (if $secrets == [] then {} else ($secrets | map({(.schedule_id | tostring): .client_secret}) | add) end) as $secretById |
+            # Build a client_id → secret map for fallback (from schedules that DO have a secret)
+            (if $secrets == [] then {} 
+             else 
+               [$allSchedules[] | select(.client_id != null) | {client_id, id: (.id | tostring)}] as $idMap |
+               ($idMap | map(select($secretById[.id] != null)) | map({(.client_id): $secretById[.id]}) | if length > 0 then add else {} end)
+             end) as $secretByClient |
+            . | map(
+              . + (
+                if $secretById[.id | tostring] then 
+                  {client_secret: $secretById[.id | tostring]}
+                elif .client_id and $secretByClient[.client_id] then 
+                  {client_secret: $secretByClient[.client_id]}
+                else {} end
+              )
+            )
           ')
           
           # Use delimiter for multiline-safe output

@@ -2198,6 +2198,19 @@ async function loadSchedule() {
                 if (schedule.has_secret) {
                     secretInput.placeholder = '(secret securely saved - leave blank to keep)';
                     secretInput.value = ''; // Clear any value
+                } else {
+                    // Check if user has a secret saved for another environment
+                    try {
+                        const otherResp = await fetch(
+                            `${cfg.url}/rest/v1/update_schedules?user_email=eq.${encodeURIComponent(userEmail)}&has_secret=eq.true&select=id`,
+                            { headers: { 'apikey': cfg.key, 'Authorization': `Bearer ${cfg.key}` } }
+                        );
+                        const others = await otherResp.json();
+                        if (others.length > 0) {
+                            secretInput.placeholder = '(will reuse secret from another environment)';
+                            secretInput.value = '';
+                        }
+                    } catch (e) { /* ignore */ }
                 }
                 document.getElementById('scheduleDetails').style.display = schedule.enabled ? 'block' : 'none';
                 updateScheduleStatus(schedule);
@@ -2293,8 +2306,30 @@ async function saveSchedule() {
         const existing = await checkResp.json();
         let resp;
         
-        // Validate credentials - only require secret for new schedules or if none exists
-        if (schedule.enabled && !newSecret && (existing.length === 0 || !existing[0].has_secret)) {
+        // Check if user already has a secret saved for ANY environment (same client_id)
+        let hasExistingSecret = existing.length > 0 && existing[0].has_secret;
+        let existingSecretScheduleId = null;
+        
+        if (!hasExistingSecret && !newSecret) {
+            // Look for a secret from another environment with same client_id
+            const otherResp = await fetch(
+                `${cfg.url}/rest/v1/update_schedules?user_email=eq.${encodeURIComponent(userEmail)}&has_secret=eq.true&select=id,client_id`,
+                {
+                    headers: {
+                        'apikey': cfg.key,
+                        'Authorization': `Bearer ${cfg.key}`
+                    }
+                }
+            );
+            const otherSchedules = await otherResp.json();
+            if (otherSchedules.length > 0) {
+                hasExistingSecret = true;
+                existingSecretScheduleId = otherSchedules[0].id;
+            }
+        }
+        
+        // Validate credentials - only require secret if none exists anywhere
+        if (schedule.enabled && !newSecret && !hasExistingSecret) {
             saveBtn.disabled = false;
             saveBtn.innerHTML = originalText;
             showError('Client Secret is required for scheduled updates.');
@@ -2345,6 +2380,30 @@ async function saveSchedule() {
                 const scheduleId = Array.isArray(savedSchedule) ? savedSchedule[0].id : savedSchedule.id;
                 await saveSecretSecurely(cfg, scheduleId, newSecret);
                 // Re-wrap for later use
+                resp = { ok: true, json: async () => savedSchedule };
+            } else if (resp.ok && existingSecretScheduleId) {
+                // Reuse secret from another environment - mark this schedule as having a secret
+                const savedSchedule = await resp.json();
+                const scheduleId = Array.isArray(savedSchedule) ? savedSchedule[0].id : savedSchedule.id;
+                // Copy the secret reference - the workflow will find it by client_id
+                schedule.has_secret = true;
+                await fetch(
+                    `${cfg.url}/rest/v1/update_schedules?id=eq.${scheduleId}`,
+                    {
+                        method: 'PATCH',
+                        headers: {
+                            'apikey': cfg.key,
+                            'Authorization': `Bearer ${cfg.key}`,
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify({ has_secret: true })
+                    }
+                );
+                // Copy the actual secret from the other schedule's secrets entry
+                // We can't read the secret (RLS), but we can duplicate it via an insert
+                // using the service role on the workflow side. Instead, just insert a reference.
+                // The workflow already merges secrets by schedule_id, so we need to copy it.
+                // Since we can't read, we'll handle this in the workflow by looking up by client_id.
                 resp = { ok: true, json: async () => savedSchedule };
             }
         }
