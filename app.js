@@ -881,6 +881,17 @@ async function switchEnvironment(envId) {
     document.getElementById('environmentName').textContent = env.name;
     renderEnvSwitcher();
     
+    // Reset schedule state for the new environment
+    scheduleLoaded = false;
+    document.getElementById('scheduleEnabled').checked = false;
+    document.getElementById('scheduleDetails').style.display = 'none';
+    document.getElementById('scheduleClientSecret').value = '';
+    document.getElementById('scheduleClientSecret').placeholder = 'Enter client secret';
+    document.getElementById('scheduleStatus').innerHTML = '<i class="fas fa-info-circle"></i> Schedule not configured';
+    document.getElementById('scheduleStatus').className = 'schedule-status';
+    // Load schedule for the new environment
+    loadSchedule();
+    
     console.log('Switching to environment:', env.name, '(' + envId + ')');
     await loadApplications();
 }
