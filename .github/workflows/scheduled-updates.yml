@@ -18,27 +18,31 @@ jobs:
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
         run: |
           # Fetch schedules with their secrets using service_role key
-          # The service_role key can read from schedule_secrets table
           SCHEDULES=$(curl -s "https://fpekzltxukikaixebeeu.supabase.co/rest/v1/update_schedules?enabled=eq.true&select=*" \
             -H "apikey: $SUPABASE_SERVICE_KEY" \
             -H "Authorization: Bearer $SUPABASE_SERVICE_KEY")
           
-          # For each schedule, get the secret from the secure table
-          ENRICHED_SCHEDULES=$(echo "$SCHEDULES" | jq -c '.')
-          
-          # Fetch secrets
+          # Fetch secrets from secure table
           SECRETS=$(curl -s "https://fpekzltxukikaixebeeu.supabase.co/rest/v1/schedule_secrets?select=schedule_id,client_secret" \
             -H "apikey: $SUPABASE_SERVICE_KEY" \
             -H "Authorization: Bearer $SUPABASE_SERVICE_KEY")
           
-          # Merge schedules with their secrets
-          MERGED=$(echo "$SCHEDULES" | jq --argjson secrets "$SECRETS" '
+          # Handle empty secrets array
+          if [ -z "$SECRETS" ] || [ "$SECRETS" = "[]" ]; then
+            SECRETS="[]"
+          fi
+          
+          # Merge schedules with their secrets (compact to single line with -c)
+          MERGED=$(echo "$SCHEDULES" | jq -c --argjson secrets "$SECRETS" '
             . as $schedules | 
-            ($secrets | map({(.schedule_id | tostring): .client_secret}) | add) as $secretMap |
-            $schedules | map(. + {client_secret: ($secretMap[.id | tostring] // .client_secret)})
+            (if $secrets == [] then {} else ($secrets | map({(.schedule_id | tostring): .client_secret}) | add) end) as $secretMap |
+            $schedules | map(. + (if $secretMap[.id | tostring] then {client_secret: $secretMap[.id | tostring]} else {} end))
           ')
           
-          echo "schedules=$MERGED" >> $GITHUB_OUTPUT
+          # Use delimiter for multiline-safe output
+          echo "schedules<<EOF" >> $GITHUB_OUTPUT
+          echo "$MERGED" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
           echo "Found $(echo "$MERGED" | jq length) schedules"
           
       - name: Process schedules
