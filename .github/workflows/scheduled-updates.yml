@@ -54,11 +54,31 @@ jobs:
               -d "{\"last_run_at\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\",\"last_run_status\":\"$status\"}" >/dev/null 2>&1
           }
 
+          # Proper semantic version comparison (handles 1.0.0.0 four-part versions)
+          ver_gt() {
+            local v1="$1" v2="$2"
+            [ -z "$v1" ] || [ -z "$v2" ] && return 1
+            [ "$v1" = "$v2" ] && return 1
+            IFS='.' read -ra a1 <<< "$v1"
+            IFS='.' read -ra a2 <<< "$v2"
+            local max=${#a1[@]}; [ ${#a2[@]} -gt $max ] && max=${#a2[@]}
+            for ((i=0; i<max; i++)); do
+              local p1=${a1[$i]:-0} p2=${a2[$i]:-0}
+              [ "$p1" -gt "$p2" ] 2>/dev/null && return 0
+              [ "$p1" -lt "$p2" ] 2>/dev/null && return 1
+            done
+            return 1
+          }
+
+          # Strip _upgrade suffix and trailing _digits for name-based matching
+          base_name() {
+            echo "$1" | sed 's/_upgrade$//i; s/_[0-9]*$//'
+          }
+
           COUNT=$(echo "$DATA" | jq 'length')
           echo "Processing $COUNT schedule(s)..."
           echo ""
 
-          # Write to file so we iterate in main shell (no subshell variable loss)
           TMPFILE=$(mktemp)
           echo "$DATA" | jq -c '.[]' > "$TMPFILE"
 
@@ -106,88 +126,312 @@ jobs:
 
             echo "  >>> TIME MATCH — running updates <<<"
 
-            # --- Get token ---
-            echo "  Acquiring token..."
-            TRESP=$(curl -s -X POST "https://login.microsoftonline.com/$TID/oauth2/v2.0/token" \
+            # ─── Get Power Platform token ───
+            echo "  Acquiring PP token..."
+            PP_RESP=$(curl -s -X POST "https://login.microsoftonline.com/$TID/oauth2/v2.0/token" \
               -d "client_id=$CID&client_secret=$CSEC&grant_type=client_credentials&scope=https://api.powerplatform.com/.default")
-            TOKEN=$(echo "$TRESP" | jq -r '.access_token // empty')
+            PP_TOKEN=$(echo "$PP_RESP" | jq -r '.access_token // empty')
 
-            if [ -z "$TOKEN" ]; then
-              TERR=$(echo "$TRESP" | jq -r '.error_description // .error // "unknown"')
-              echo "  Token FAILED: $TERR"
+            if [ -z "$PP_TOKEN" ]; then
+              TERR=$(echo "$PP_RESP" | jq -r '.error_description // .error // "unknown"')
+              echo "  PP Token FAILED: $TERR"
               update_status "$ID" "token_failed"
               echo ""; continue
             fi
-            echo "  Token: OK"
+            echo "  PP Token: OK"
 
-            # --- Fetch installed apps ---
-            echo "  Fetching installed apps..."
-            INST=$(curl -s "https://api.powerplatform.com/appmanagement/environments/$ENV/applicationPackages?appInstallState=Installed&api-version=2022-03-01-preview" \
-              -H "Authorization: Bearer $TOKEN")
-            INST_COUNT=$(echo "$INST" | jq '[.value[]?] | length' 2>/dev/null)
+            # ─── Get BAP token (same client, different scope) ───
+            echo "  Acquiring BAP token..."
+            BAP_RESP=$(curl -s -X POST "https://login.microsoftonline.com/$TID/oauth2/v2.0/token" \
+              -d "client_id=$CID&client_secret=$CSEC&grant_type=client_credentials&scope=https://api.bap.microsoft.com/.default")
+            BAP_TOKEN=$(echo "$BAP_RESP" | jq -r '.access_token // empty')
 
-            if [ -z "$INST_COUNT" ] || [ "$INST_COUNT" = "0" ] || [ "$INST_COUNT" = "null" ]; then
-              echo "  No installed apps or API error"
-              echo "  Response preview: $(echo "$INST" | head -c 200)"
+            if [ -z "$BAP_TOKEN" ]; then
+              echo "  BAP Token FAILED (will use PP API only)"
+              BAP_TOKEN=""
+            else
+              echo "  BAP Token: OK"
+            fi
+
+            # ─── Fetch installed apps (PP API) ───
+            echo "  Fetching installed apps (PP API)..."
+            INST=$(curl -s "https://api.powerplatform.com/appmanagement/environments/$ENV/applicationPackages?api-version=2022-03-01-preview" \
+              -H "Authorization: Bearer $PP_TOKEN")
+            ALL_APPS=$(echo "$INST" | jq '[.value[]?]' 2>/dev/null)
+            TOTAL_COUNT=$(echo "$ALL_APPS" | jq 'length' 2>/dev/null)
+
+            if [ -z "$TOTAL_COUNT" ] || [ "$TOTAL_COUNT" = "0" ] || [ "$TOTAL_COUNT" = "null" ]; then
+              echo "  No apps returned from PP API or API error"
+              echo "  Response preview: $(echo "$INST" | head -c 300)"
               update_status "$ID" "api_error"
               echo ""; continue
             fi
-            echo "  Installed apps: $INST_COUNT"
+            echo "  PP API returned: $TOTAL_COUNT total packages"
 
-            # --- Fetch catalog ---
-            echo "  Fetching catalog..."
-            CAT=$(curl -s "https://api.powerplatform.com/appmanagement/environments/$ENV/applicationPackages?api-version=2022-03-01-preview" \
-              -H "Authorization: Bearer $TOKEN")
-            CAT_COUNT=$(echo "$CAT" | jq '[.value[]?] | length' 2>/dev/null)
-            echo "  Catalog apps: $CAT_COUNT"
+            # Separate installed apps from catalog
+            INSTALLED=$(echo "$ALL_APPS" | jq '[.[] | select(.state != null and (.state | ascii_downcase | test("install|update")))]')
+            INST_COUNT=$(echo "$INSTALLED" | jq 'length')
+            echo "  Installed/updatable apps: $INST_COUNT"
 
-            # --- Compare and update ---
-            UPDATED=0
-            FAILED=0
+            # ─── Also fetch from BAP Admin API (this catches updates PP misses) ───
+            BAP_APPS="[]"
+            if [ -n "$BAP_TOKEN" ]; then
+              echo "  Fetching BAP Admin API..."
+              BAP_RAW=$(curl -s "https://api.bap.microsoft.com/providers/Microsoft.BusinessAppPlatform/scopes/admin/environments/$ENV/applicationPackages?api-version=2021-04-01" \
+                -H "Authorization: Bearer $BAP_TOKEN")
+              BAP_APPS=$(echo "$BAP_RAW" | jq '[.value[]?]' 2>/dev/null || echo "[]")
+              BAP_COUNT=$(echo "$BAP_APPS" | jq 'length' 2>/dev/null)
+              echo "  BAP API returned: $BAP_COUNT packages"
+            fi
 
-            # Write installed list to file (avoid subshell)
-            APP_FILE=$(mktemp)
-            echo "$INST" | jq -c '.value[]?' > "$APP_FILE" 2>/dev/null
+            # ─── Build update list using same logic as the UI ───
+            # For each installed app, detect updates via multiple methods:
+            #   1. State-based (state contains "update")
+            #   2. Direct fields (updateAvailable, catalogVersion, etc.)
+            #   3. Catalog match by applicationId (higher version in catalog)
+            #   4. Catalog match by uniqueName base
+            #   5. Catalog match by display name
+            #   6. BAP API cross-check (all the above methods again)
+
+            UPDATES_FILE=$(mktemp)
+            > "$UPDATES_FILE"
+
+            INST_FILE=$(mktemp)
+            echo "$INSTALLED" | jq -c '.[]' > "$INST_FILE" 2>/dev/null
 
             while IFS= read -r app; do
               AID=$(echo "$app" | jq -r '.applicationId // empty')
-              [ -z "$AID" ] && continue
-
-              ANAME=$(echo "$app" | jq -r '.localizedName // .applicationName // "?"')
+              ANAME=$(echo "$app" | jq -r '.localizedName // .applicationName // .uniqueName // "?"')
               AVER=$(echo "$app" | jq -r '.version // "0"')
               AUNAME=$(echo "$app" | jq -r '.uniqueName // empty')
+              ASTATE=$(echo "$app" | jq -r '.state // ""' | tr '[:upper:]' '[:lower:]')
+              SPA=$(echo "$app" | jq -r '.singlePageApplicationUrl // empty')
 
-              CVER=$(echo "$CAT" | jq -r --arg id "$AID" \
-                '[.value[]? | select(.applicationId == $id)] | sort_by(.version) | last | .version // empty')
-              CUNAME=$(echo "$CAT" | jq -r --arg id "$AID" \
-                '[.value[]? | select(.applicationId == $id)] | sort_by(.version) | last | .uniqueName // empty')
+              # Skip SPA apps (must be updated through Admin Center)
+              if [ -n "$SPA" ]; then
+                echo "  [skip SPA] $ANAME"
+                continue
+              fi
 
-              [ -z "$CVER" ] && continue
-              [ "$CVER" = "$AVER" ] && continue
+              HAS_UPDATE=false
+              INSTALL_PKG=""
+              LATEST_VER=""
+              DETECT_METHOD=""
 
-              HIGHER=$(printf '%s\n%s' "$AVER" "$CVER" | sort -V | tail -1)
-              if [ "$HIGHER" = "$CVER" ] && [ "$HIGHER" != "$AVER" ]; then
-                PNAME="${CUNAME:-$AUNAME}"
-                echo "  UPDATE: $ANAME  $AVER -> $CVER  (pkg=$PNAME)"
+              # ── Check 1: State-based detection ──
+              case "$ASTATE" in
+                *update*|updateavailable|installedwithupdateavailable)
+                  HAS_UPDATE=true
+                  DETECT_METHOD="state=$ASTATE"
+                  ;;
+              esac
 
-                HTTP=$(curl -s -o /dev/null -w "%{http_code}" -X POST \
-                  "https://api.powerplatform.com/appmanagement/environments/$ENV/applicationPackages/$PNAME/install?api-version=2022-03-01-preview" \
-                  -H "Authorization: Bearer $TOKEN" \
-                  -H "Content-Type: application/json")
-
-                if [ "$HTTP" -ge 200 ] 2>/dev/null && [ "$HTTP" -lt 300 ] 2>/dev/null; then
-                  echo "    -> Submitted (HTTP $HTTP)"
-                  UPDATED=$((UPDATED + 1))
-                else
-                  echo "    -> Failed (HTTP $HTTP)"
-                  FAILED=$((FAILED + 1))
+              # ── Check 2: Direct API fields ──
+              if [ "$HAS_UPDATE" = false ]; then
+                DIRECT_VER=$(echo "$app" | jq -r '(.catalogVersion // .availableVersion // .latestVersion // .newVersion // .updateVersion // empty)')
+                if [ -n "$DIRECT_VER" ] && ver_gt "$DIRECT_VER" "$AVER"; then
+                  HAS_UPDATE=true
+                  LATEST_VER="$DIRECT_VER"
+                  DETECT_METHOD="direct-field"
+                fi
+                UA=$(echo "$app" | jq -r '.updateAvailable // empty')
+                if [ "$UA" = "true" ] && [ "$HAS_UPDATE" = false ]; then
+                  HAS_UPDATE=true
+                  DETECT_METHOD="updateAvailable=true"
                 fi
               fi
-            done < "$APP_FILE"
-            rm -f "$APP_FILE"
 
-            echo "  Results: $UPDATED updated, $FAILED failed"
-            update_status "$ID" "success"
+              # ── Check 3: Catalog match by applicationId ──
+              if [ "$HAS_UPDATE" = false ] && [ -n "$AID" ]; then
+                CMATCH=$(echo "$ALL_APPS" | jq -r --arg id "$AID" \
+                  '[.[] | select(.applicationId == $id)] | sort_by(.version) | last // empty')
+                if [ -n "$CMATCH" ] && [ "$CMATCH" != "null" ]; then
+                  CVER=$(echo "$CMATCH" | jq -r '.version // empty')
+                  CUNAME=$(echo "$CMATCH" | jq -r '.uniqueName // empty')
+                  if [ -n "$CVER" ] && ver_gt "$CVER" "$AVER"; then
+                    HAS_UPDATE=true
+                    LATEST_VER="$CVER"
+                    INSTALL_PKG="$CUNAME"
+                    DETECT_METHOD="catalog-by-appId"
+                  fi
+                fi
+              fi
+
+              # ── Check 4: Catalog match by uniqueName base ──
+              if [ "$HAS_UPDATE" = false ] && [ -n "$AUNAME" ]; then
+                ABASE=$(base_name "$AUNAME")
+                CMATCH=$(echo "$ALL_APPS" | jq -r --arg bn "$ABASE" \
+                  '[.[] | select(.uniqueName != null) | select((.uniqueName | gsub("_upgrade$";"") | gsub("_[0-9]+$";"")) == $bn)] | sort_by(.version) | last // empty')
+                if [ -n "$CMATCH" ] && [ "$CMATCH" != "null" ]; then
+                  CVER=$(echo "$CMATCH" | jq -r '.version // empty')
+                  CUNAME=$(echo "$CMATCH" | jq -r '.uniqueName // empty')
+                  if [ -n "$CVER" ] && ver_gt "$CVER" "$AVER"; then
+                    HAS_UPDATE=true
+                    LATEST_VER="$CVER"
+                    INSTALL_PKG="$CUNAME"
+                    DETECT_METHOD="catalog-by-name"
+                  fi
+                fi
+              fi
+
+              # ── Check 5: Catalog match by display name ──
+              if [ "$HAS_UPDATE" = false ]; then
+                ANAME_LC=$(echo "$ANAME" | tr '[:upper:]' '[:lower:]')
+                CMATCH=$(echo "$ALL_APPS" | jq -r --arg dn "$ANAME_LC" \
+                  '[.[] | select((.localizedName // .applicationName // "" | ascii_downcase) == $dn)] | sort_by(.version) | last // empty')
+                if [ -n "$CMATCH" ] && [ "$CMATCH" != "null" ]; then
+                  CVER=$(echo "$CMATCH" | jq -r '.version // empty')
+                  CUNAME=$(echo "$CMATCH" | jq -r '.uniqueName // empty')
+                  if [ -n "$CVER" ] && ver_gt "$CVER" "$AVER"; then
+                    HAS_UPDATE=true
+                    LATEST_VER="$CVER"
+                    INSTALL_PKG="$CUNAME"
+                    DETECT_METHOD="catalog-by-displayName"
+                  fi
+                fi
+              fi
+
+              # ── Check 6: BAP API cross-check ──
+              if [ "$HAS_UPDATE" = false ] && [ "$BAP_APPS" != "[]" ]; then
+                # 6a: BAP state-based
+                if [ -n "$AID" ]; then
+                  BAP_INST=$(echo "$BAP_APPS" | jq -r --arg id "$AID" \
+                    '[.[] | select(.applicationId == $id and (.state != null))] | first // empty')
+                  if [ -n "$BAP_INST" ] && [ "$BAP_INST" != "null" ]; then
+                    BAP_STATE=$(echo "$BAP_INST" | jq -r '.state // ""' | tr '[:upper:]' '[:lower:]')
+                    case "$BAP_STATE" in
+                      *update*|updateavailable)
+                        HAS_UPDATE=true
+                        INSTALL_PKG=$(echo "$BAP_INST" | jq -r '.uniqueName // empty')
+                        DETECT_METHOD="BAP-state=$BAP_STATE"
+                        ;;
+                    esac
+                    # BAP direct fields
+                    if [ "$HAS_UPDATE" = false ]; then
+                      BAP_DVER=$(echo "$BAP_INST" | jq -r '(.catalogVersion // .availableVersion // .latestVersion // empty)')
+                      if [ -n "$BAP_DVER" ] && ver_gt "$BAP_DVER" "$AVER"; then
+                        HAS_UPDATE=true
+                        LATEST_VER="$BAP_DVER"
+                        INSTALL_PKG=$(echo "$BAP_INST" | jq -r '.uniqueName // empty')
+                        DETECT_METHOD="BAP-direct"
+                      fi
+                    fi
+                    if [ "$HAS_UPDATE" = false ]; then
+                      BAP_UA=$(echo "$BAP_INST" | jq -r '.updateAvailable // empty')
+                      if [ "$BAP_UA" = "true" ]; then
+                        HAS_UPDATE=true
+                        INSTALL_PKG=$(echo "$BAP_INST" | jq -r '.uniqueName // empty')
+                        DETECT_METHOD="BAP-updateAvailable"
+                      fi
+                    fi
+                  fi
+                fi
+
+                # 6b: BAP catalog version by applicationId
+                if [ "$HAS_UPDATE" = false ] && [ -n "$AID" ]; then
+                  BAP_CAT=$(echo "$BAP_APPS" | jq -r --arg id "$AID" \
+                    '[.[] | select(.applicationId == $id)] | sort_by(.version) | last // empty')
+                  if [ -n "$BAP_CAT" ] && [ "$BAP_CAT" != "null" ]; then
+                    BVER=$(echo "$BAP_CAT" | jq -r '.version // empty')
+                    BUNAME=$(echo "$BAP_CAT" | jq -r '.uniqueName // empty')
+                    if [ -n "$BVER" ] && ver_gt "$BVER" "$AVER"; then
+                      HAS_UPDATE=true
+                      LATEST_VER="$BVER"
+                      INSTALL_PKG="$BUNAME"
+                      DETECT_METHOD="BAP-by-appId"
+                    fi
+                  fi
+                fi
+
+                # 6c: BAP by uniqueName base
+                if [ "$HAS_UPDATE" = false ] && [ -n "$AUNAME" ]; then
+                  ABASE=$(base_name "$AUNAME")
+                  BAP_BN=$(echo "$BAP_APPS" | jq -r --arg bn "$ABASE" \
+                    '[.[] | select(.uniqueName != null) | select((.uniqueName | gsub("_upgrade$";"") | gsub("_[0-9]+$";"")) == $bn)] | sort_by(.version) | last // empty')
+                  if [ -n "$BAP_BN" ] && [ "$BAP_BN" != "null" ]; then
+                    BVER=$(echo "$BAP_BN" | jq -r '.version // empty')
+                    BUNAME=$(echo "$BAP_BN" | jq -r '.uniqueName // empty')
+                    if [ -n "$BVER" ] && ver_gt "$BVER" "$AVER"; then
+                      HAS_UPDATE=true
+                      LATEST_VER="$BVER"
+                      INSTALL_PKG="$BUNAME"
+                      DETECT_METHOD="BAP-by-name"
+                    fi
+                  fi
+                fi
+
+                # 6d: BAP by display name
+                if [ "$HAS_UPDATE" = false ]; then
+                  ANAME_LC=$(echo "$ANAME" | tr '[:upper:]' '[:lower:]')
+                  BAP_DN=$(echo "$BAP_APPS" | jq -r --arg dn "$ANAME_LC" \
+                    '[.[] | select((.localizedName // .applicationName // "" | ascii_downcase) == $dn)] | sort_by(.version) | last // empty')
+                  if [ -n "$BAP_DN" ] && [ "$BAP_DN" != "null" ]; then
+                    BVER=$(echo "$BAP_DN" | jq -r '.version // empty')
+                    BUNAME=$(echo "$BAP_DN" | jq -r '.uniqueName // empty')
+                    if [ -n "$BVER" ] && ver_gt "$BVER" "$AVER"; then
+                      HAS_UPDATE=true
+                      LATEST_VER="$BVER"
+                      INSTALL_PKG="$BUNAME"
+                      DETECT_METHOD="BAP-by-displayName"
+                    fi
+                  fi
+                fi
+              fi
+
+              # ── If update detected, add to update list ──
+              if [ "$HAS_UPDATE" = true ]; then
+                PKG="${INSTALL_PKG:-$AUNAME}"
+                VER_INFO="${AVER} -> ${LATEST_VER:-unknown}"
+                echo "  [UPDATE via $DETECT_METHOD] $ANAME  $VER_INFO  (pkg=$PKG)"
+                echo "$PKG|$ANAME|$VER_INFO" >> "$UPDATES_FILE"
+              fi
+            done < "$INST_FILE"
+            rm -f "$INST_FILE"
+
+            # ─── Submit install for each detected update ───
+            UPDATED=0
+            FAILED=0
+            UPDATE_COUNT=$(wc -l < "$UPDATES_FILE" | tr -d ' ')
+
+            if [ "$UPDATE_COUNT" = "0" ]; then
+              echo "  No updates available for this environment."
+              update_status "$ID" "success"
+              echo ""; rm -f "$UPDATES_FILE"; continue
+            fi
+
+            echo ""
+            echo "  Installing $UPDATE_COUNT update(s)..."
+
+            while IFS='|' read -r PKG ANAME VER_INFO; do
+              [ -z "$PKG" ] && continue
+              echo "  INSTALL: $ANAME ($VER_INFO) pkg=$PKG"
+
+              RESP=$(curl -s -w "\n%{http_code}" -X POST \
+                "https://api.powerplatform.com/appmanagement/environments/$ENV/applicationPackages/$PKG/install?api-version=2022-03-01-preview" \
+                -H "Authorization: Bearer $PP_TOKEN" \
+                -H "Content-Type: application/json")
+              HTTP=$(echo "$RESP" | tail -1)
+              BODY=$(echo "$RESP" | sed '$d')
+
+              if [ "$HTTP" -ge 200 ] 2>/dev/null && [ "$HTTP" -lt 300 ] 2>/dev/null; then
+                echo "    -> Submitted OK (HTTP $HTTP)"
+                UPDATED=$((UPDATED + 1))
+              else
+                echo "    -> FAILED (HTTP $HTTP): $(echo "$BODY" | head -c 200)"
+                FAILED=$((FAILED + 1))
+              fi
+
+              # Small delay between installs (avoid throttling)
+              sleep 2
+            done < "$UPDATES_FILE"
+            rm -f "$UPDATES_FILE"
+
+            echo "  Results: $UPDATED submitted, $FAILED failed (out of $UPDATE_COUNT)"
+            if [ "$FAILED" -eq 0 ]; then
+              update_status "$ID" "success"
+            else
+              update_status "$ID" "partial_failure"
+            fi
             echo ""
 
           done < "$TMPFILE"
