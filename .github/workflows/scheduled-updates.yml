@@ -16,44 +16,21 @@ jobs:
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
         run: |
           echo "=== Fetching schedules ==="
+          # Fetch all enabled schedules (client_secret is already in this table)
           SCHEDULES=$(curl -sf "https://fpekzltxukikaixebeeu.supabase.co/rest/v1/update_schedules?enabled=eq.true&select=*" \
             -H "apikey: $SUPABASE_SERVICE_KEY" \
             -H "Authorization: Bearer $SUPABASE_SERVICE_KEY" || echo "[]")
 
-          SECRETS=$(curl -sf "https://fpekzltxukikaixebeeu.supabase.co/rest/v1/schedule_secrets?select=schedule_id,client_secret" \
-            -H "apikey: $SUPABASE_SERVICE_KEY" \
-            -H "Authorization: Bearer $SUPABASE_SERVICE_KEY" || echo "[]")
-
-          [ -z "$SECRETS" ] && SECRETS="[]"
           [ -z "$SCHEDULES" ] && SCHEDULES="[]"
 
-          # Build client_id-to-secret lookup from schedule+secrets join
-          # 1. Direct match by schedule_id
-          # 2. Fallback: find any secret for same client_id
-          MERGED=$(jq -n -c \
-            --argjson scheds "$SCHEDULES" \
-            --argjson secs "$SECRETS" '
-            ($secs | if length > 0 then map({(.schedule_id|tostring): .client_secret}) | add else {} end) as $byId |
-            # Build client_id -> secret map by joining schedules that have a secret
-            ([$scheds[] | select(.client_id != null) |
-              {cid: .client_id, sec: $byId[.id|tostring]}
-            ] | map(select(.sec != null)) |
-              if length > 0 then map({(.cid): .sec}) | add else {} end
-            ) as $byCid |
-            $scheds | map(
-              . + {client_secret: (
-                $byId[.id|tostring] //
-                $byCid[.client_id] //
-                null
-              )}
-            )
-          ')
-
-          COUNT=$(echo "$MERGED" | jq 'length')
+          COUNT=$(echo "$SCHEDULES" | jq 'length')
           echo "Found $COUNT enabled schedule(s)"
 
+          # Debug: show which schedules have secrets
+          echo "$SCHEDULES" | jq -r '.[] | "  #\(.id) secret=\(if .client_secret != null and .client_secret != "" then "YES" else "NO" end)"'
+
           echo "data<<ENDOFDATA" >> $GITHUB_OUTPUT
-          echo "$MERGED" >> $GITHUB_OUTPUT
+          echo "$SCHEDULES" >> $GITHUB_OUTPUT
           echo "ENDOFDATA" >> $GITHUB_OUTPUT
 
       - name: Process each schedule

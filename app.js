@@ -2393,28 +2393,36 @@ async function saveSchedule() {
                 // Re-wrap for later use
                 resp = { ok: true, json: async () => savedSchedule };
             } else if (resp.ok && existingSecretScheduleId) {
-                // Reuse secret from another environment - mark this schedule as having a secret
+                // Reuse secret from another environment - copy the actual secret value
                 const savedSchedule = await resp.json();
                 const scheduleId = Array.isArray(savedSchedule) ? savedSchedule[0].id : savedSchedule.id;
-                // Copy the secret reference - the workflow will find it by client_id
-                schedule.has_secret = true;
-                await fetch(
-                    `${cfg.url}/rest/v1/update_schedules?id=eq.${scheduleId}`,
-                    {
-                        method: 'PATCH',
-                        headers: {
-                            'apikey': cfg.key,
-                            'Authorization': `Bearer ${cfg.key}`,
-                            'Content-Type': 'application/json'
-                        },
-                        body: JSON.stringify({ has_secret: true })
+                
+                // Read the secret from the other schedule
+                try {
+                    const srcResp = await fetch(
+                        `${cfg.url}/rest/v1/update_schedules?id=eq.${existingSecretScheduleId}&select=client_secret`,
+                        { headers: { 'apikey': cfg.key, 'Authorization': `Bearer ${cfg.key}` } }
+                    );
+                    const srcData = await srcResp.json();
+                    if (srcData.length > 0 && srcData[0].client_secret) {
+                        // Copy secret to the new schedule
+                        await fetch(
+                            `${cfg.url}/rest/v1/update_schedules?id=eq.${scheduleId}`,
+                            {
+                                method: 'PATCH',
+                                headers: {
+                                    'apikey': cfg.key,
+                                    'Authorization': `Bearer ${cfg.key}`,
+                                    'Content-Type': 'application/json'
+                                },
+                                body: JSON.stringify({ client_secret: srcData[0].client_secret, has_secret: true })
+                            }
+                        );
+                        console.log('✅ Secret copied from schedule', existingSecretScheduleId);
                     }
-                );
-                // Copy the actual secret from the other schedule's secrets entry
-                // We can't read the secret (RLS), but we can duplicate it via an insert
-                // using the service role on the workflow side. Instead, just insert a reference.
-                // The workflow already merges secrets by schedule_id, so we need to copy it.
-                // Since we can't read, we'll handle this in the workflow by looking up by client_id.
+                } catch (e) {
+                    console.warn('Could not copy secret:', e.message);
+                }
                 resp = { ok: true, json: async () => savedSchedule };
             }
         }
