@@ -51,17 +51,23 @@ jobs:
           SUPABASE_URL: https://fpekzltxukikaixebeeu.supabase.co
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
         run: |
-          # Get current UTC time
-          CURRENT_UTC_DAY=$(date -u +%w)
-          CURRENT_UTC_HOUR=$(date -u +%H):00
-          
-          echo "Current UTC: Day $CURRENT_UTC_DAY, Time $CURRENT_UTC_HOUR"
+          echo "========================================="
+          echo "🕐 CURRENT TIME INFO"
+          echo "========================================="
+          echo "UTC:     $(date -u '+%A %Y-%m-%d %H:%M:%S')"
+          echo "UTC day: $(date -u +%w), UTC hour: $(date -u +%H):00"
+          echo ""
           
           # Check if schedules is empty or null
-          if [ -z "$SCHEDULES" ] || [ "$SCHEDULES" = "[]" ]; then
-            echo "No enabled schedules found"
+          if [ -z "$SCHEDULES" ] || [ "$SCHEDULES" = "[]" ] || [ "$SCHEDULES" = "null" ]; then
+            echo "❌ No enabled schedules found. Check SUPABASE_SERVICE_KEY secret."
+            echo "Raw SCHEDULES value: '$SCHEDULES'"
             exit 0
           fi
+          
+          SCHEDULE_COUNT=$(echo "$SCHEDULES" | jq 'length' 2>/dev/null || echo "0")
+          echo "📋 Found $SCHEDULE_COUNT enabled schedule(s)"
+          echo ""
           
           # Parse and process each schedule
           echo "$SCHEDULES" | jq -c '.[]' 2>/dev/null | while read schedule; do
@@ -81,110 +87,201 @@ jobs:
             # Get current time in the schedule's timezone
             CURRENT_LOCAL_DAY=$(TZ="$SCHEDULE_TZ" date +%w)
             CURRENT_LOCAL_HOUR=$(TZ="$SCHEDULE_TZ" date +%H):00
+            CURRENT_LOCAL_TIME=$(TZ="$SCHEDULE_TZ" date '+%A %Y-%m-%d %H:%M:%S %Z')
             
-            echo "Checking schedule $SCHEDULE_ID: Day $SCHEDULE_DAY at $SCHEDULE_TIME ($SCHEDULE_TZ)"
-            echo "  Current local time in $SCHEDULE_TZ: Day $CURRENT_LOCAL_DAY, Time $CURRENT_LOCAL_HOUR"
+            echo "========================================="
+            echo "📅 SCHEDULE #$SCHEDULE_ID ($USER_EMAIL)"
+            echo "========================================="
+            echo "  Org URL:       $ORG_URL"
+            echo "  Env ID:        $ENV_ID"
+            echo "  Schedule:      Day $SCHEDULE_DAY at $SCHEDULE_TIME ($SCHEDULE_TZ)"
+            echo "  Current local: Day $CURRENT_LOCAL_DAY at $CURRENT_LOCAL_HOUR ($CURRENT_LOCAL_TIME)"
+            echo "  Client ID:     ${USER_CLIENT_ID:0:8}..."
+            echo "  Tenant ID:     ${USER_TENANT_ID:0:8}..."
+            echo "  Has secret:    $([ -n '$USER_CLIENT_SECRET' ] && echo 'Yes' || echo 'No')"
+            echo ""
             
             # Validate credentials
             if [ -z "$USER_CLIENT_ID" ] || [ -z "$USER_CLIENT_SECRET" ]; then
-              echo "⚠️ Schedule $SCHEDULE_ID missing credentials, skipping"
+              echo "  ⚠️ SKIPPED: Missing credentials (client_id or client_secret empty)"
+              echo ""
+              continue
+            fi
+            
+            if [ -z "$USER_TENANT_ID" ]; then
+              echo "  ⚠️ SKIPPED: Missing tenant_id"
+              echo ""
               continue
             fi
             
             # Check if schedule matches current LOCAL time (in user's timezone)
-            if [ "$SCHEDULE_DAY" = "$CURRENT_LOCAL_DAY" ] && [ "$SCHEDULE_TIME" = "$CURRENT_LOCAL_HOUR" ]; then
-              echo "✅ Schedule matches! Processing updates for $ORG_URL"
+            if [ "$SCHEDULE_DAY" != "$CURRENT_LOCAL_DAY" ] || [ "$SCHEDULE_TIME" != "$CURRENT_LOCAL_HOUR" ]; then
+              echo "  ⏭️ SKIPPED: Time doesn't match"
+              echo "     Expected: Day=$SCHEDULE_DAY Time=$SCHEDULE_TIME"
+              echo "     Current:  Day=$CURRENT_LOCAL_DAY Time=$CURRENT_LOCAL_HOUR"
+              echo ""
               
-              # Get access token for Power Platform API (not Dataverse)
-              TOKEN_RESPONSE=$(curl -s -X POST "https://login.microsoftonline.com/${USER_TENANT_ID}/oauth2/v2.0/token" \
+              # Still update Supabase to show the workflow DID run (just not matching time)
+              curl -s -X PATCH "${SUPABASE_URL}/rest/v1/update_schedules?id=eq.${SCHEDULE_ID}" \
+                -H "apikey: $SUPABASE_SERVICE_KEY" \
+                -H "Authorization: Bearer $SUPABASE_SERVICE_KEY" \
+                -H "Content-Type: application/json" \
+                -d "{\"last_run_at\": \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\", \"last_run_status\": \"skipped\"}" > /dev/null 2>&1
+              continue
+            fi
+            
+            echo "  ✅ TIME MATCH! Processing updates..."
+            echo ""
+            
+            # ── Step 1: Get access token for Power Platform API ──
+            echo "  🔑 Step 1: Acquiring token for Power Platform API..."
+            TOKEN_RESPONSE=$(curl -s -X POST "https://login.microsoftonline.com/${USER_TENANT_ID}/oauth2/v2.0/token" \
+              -H "Content-Type: application/x-www-form-urlencoded" \
+              -d "client_id=${USER_CLIENT_ID}&client_secret=${USER_CLIENT_SECRET}&grant_type=client_credentials&scope=https://api.powerplatform.com/.default")
+            
+            ACCESS_TOKEN=$(echo $TOKEN_RESPONSE | jq -r '.access_token // empty')
+            TOKEN_ERROR=$(echo $TOKEN_RESPONSE | jq -r '.error_description // .error // empty')
+            
+            if [ -z "$ACCESS_TOKEN" ]; then
+              echo "  ❌ FAILED to get Power Platform API token"
+              echo "  Error: $TOKEN_ERROR"
+              echo ""
+              
+              # Try Dataverse token as fallback for diagnostics
+              echo "  🔑 Trying Dataverse token (${ORG_URL}/.default)..."
+              DV_TOKEN_RESPONSE=$(curl -s -X POST "https://login.microsoftonline.com/${USER_TENANT_ID}/oauth2/v2.0/token" \
                 -H "Content-Type: application/x-www-form-urlencoded" \
-                -d "client_id=${USER_CLIENT_ID}&client_secret=${USER_CLIENT_SECRET}&grant_type=client_credentials&scope=https://api.powerplatform.com/.default")
+                -d "client_id=${USER_CLIENT_ID}&client_secret=${USER_CLIENT_SECRET}&grant_type=client_credentials&scope=${ORG_URL}/.default")
+              DV_TOKEN=$(echo $DV_TOKEN_RESPONSE | jq -r '.access_token // empty')
+              DV_ERROR=$(echo $DV_TOKEN_RESPONSE | jq -r '.error_description // .error // empty')
               
-              ACCESS_TOKEN=$(echo $TOKEN_RESPONSE | jq -r '.access_token')
-              
-              if [ "$ACCESS_TOKEN" != "null" ] && [ -n "$ACCESS_TOKEN" ]; then
-                echo "🔑 Got access token for Power Platform API"
-                
-                # Fetch installed apps
-                echo "📦 Fetching installed apps..."
-                INSTALLED_APPS=$(curl -s "https://api.powerplatform.com/appmanagement/environments/${ENV_ID}/applicationPackages?appInstallState=Installed&api-version=2022-03-01-preview" \
-                  -H "Authorization: Bearer $ACCESS_TOKEN" \
-                  -H "Accept: application/json")
-                
-                # Fetch all catalog apps (to find newer versions)
-                echo "📦 Fetching catalog apps..."
-                CATALOG_APPS=$(curl -s "https://api.powerplatform.com/appmanagement/environments/${ENV_ID}/applicationPackages?api-version=2022-03-01-preview" \
-                  -H "Authorization: Bearer $ACCESS_TOKEN" \
-                  -H "Accept: application/json")
-                
-                # Find apps with updates and install them
-                UPDATED_COUNT=0
-                FAILED_COUNT=0
-                
-                echo "$INSTALLED_APPS" | jq -c '.value[]? // empty' 2>/dev/null | while read installed; do
-                  APP_ID=$(echo $installed | jq -r '.applicationId // empty')
-                  APP_NAME=$(echo $installed | jq -r '.localizedName // .applicationName // "Unknown"')
-                  INSTALLED_VERSION=$(echo $installed | jq -r '.version // "0.0.0"')
-                  UNIQUE_NAME=$(echo $installed | jq -r '.uniqueName // empty')
-                  
-                  if [ -z "$APP_ID" ]; then continue; fi
-                  
-                  # Find latest version in catalog
-                  CATALOG_VERSION=$(echo "$CATALOG_APPS" | jq -r --arg id "$APP_ID" '[.value[]? | select(.applicationId == $id)] | sort_by(.version) | last | .version // "0.0.0"')
-                  CATALOG_UNIQUE=$(echo "$CATALOG_APPS" | jq -r --arg id "$APP_ID" '[.value[]? | select(.applicationId == $id)] | sort_by(.version) | last | .uniqueName // empty')
-                  
-                  # Compare versions (simple string compare works for semver)
-                  if [ "$CATALOG_VERSION" != "0.0.0" ] && [ "$CATALOG_VERSION" != "$INSTALLED_VERSION" ]; then
-                    # Check if catalog version is higher
-                    HIGHER=$(echo -e "$INSTALLED_VERSION\n$CATALOG_VERSION" | sort -V | tail -1)
-                    if [ "$HIGHER" = "$CATALOG_VERSION" ] && [ "$HIGHER" != "$INSTALLED_VERSION" ]; then
-                      echo "🔄 Updating $APP_NAME: $INSTALLED_VERSION → $CATALOG_VERSION"
-                      
-                      # Use catalog uniqueName if available, otherwise use installed uniqueName
-                      UPDATE_NAME="${CATALOG_UNIQUE:-$UNIQUE_NAME}"
-                      
-                      UPDATE_RESPONSE=$(curl -s -w "\n%{http_code}" -X POST "https://api.powerplatform.com/appmanagement/environments/${ENV_ID}/applicationPackages/${UPDATE_NAME}/install?api-version=2022-03-01-preview" \
-                        -H "Authorization: Bearer $ACCESS_TOKEN" \
-                        -H "Content-Type: application/json")
-                      
-                      HTTP_CODE=$(echo "$UPDATE_RESPONSE" | tail -1)
-                      RESPONSE_BODY=$(echo "$UPDATE_RESPONSE" | head -n -1)
-                      
-                      if [ "$HTTP_CODE" -ge 200 ] && [ "$HTTP_CODE" -lt 300 ]; then
-                        echo "  ✅ Update submitted successfully"
-                        UPDATED_COUNT=$((UPDATED_COUNT + 1))
-                      else
-                        echo "  ❌ Update failed: $HTTP_CODE - $RESPONSE_BODY"
-                        FAILED_COUNT=$((FAILED_COUNT + 1))
-                      fi
-                    fi
-                  fi
-                done
-                
-                echo "📊 Updates submitted: $UPDATED_COUNT, Failed: $FAILED_COUNT"
-                
-                # Update last_run status in Supabase
-                curl -s -X PATCH "${SUPABASE_URL}/rest/v1/update_schedules?id=eq.${SCHEDULE_ID}" \
-                  -H "apikey: $SUPABASE_SERVICE_KEY" \
-                  -H "Authorization: Bearer $SUPABASE_SERVICE_KEY" \
-                  -H "Content-Type: application/json" \
-                  -d "{\"last_run_at\": \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\", \"last_run_status\": \"success\", \"last_run_details\": \"Updated: $UPDATED_COUNT, Failed: $FAILED_COUNT\"}"
-                
-                echo "✅ Updated schedule $SCHEDULE_ID status to success"
+              if [ -n "$DV_TOKEN" ]; then
+                echo "  ✅ Dataverse token works! Using Dataverse API for updates..."
+                ACCESS_TOKEN="$DV_TOKEN"
+                USE_DATAVERSE=true
               else
-                echo "❌ Failed to get access token"
-                echo "Token response: $TOKEN_RESPONSE"
+                echo "  ❌ Dataverse token also failed: $DV_ERROR"
                 
-                # Update status as failed
                 curl -s -X PATCH "${SUPABASE_URL}/rest/v1/update_schedules?id=eq.${SCHEDULE_ID}" \
                   -H "apikey: $SUPABASE_SERVICE_KEY" \
                   -H "Authorization: Bearer $SUPABASE_SERVICE_KEY" \
                   -H "Content-Type: application/json" \
-                  -d "{\"last_run_at\": \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\", \"last_run_status\": \"failed\", \"last_run_details\": \"Failed to acquire token\"}"
+                  -d "{\"last_run_at\": \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\", \"last_run_status\": \"failed\"}" > /dev/null 2>&1
+                continue
               fi
             else
-              echo "⏭️ Schedule $SCHEDULE_ID doesn't match current time, skipping"
+              echo "  ✅ Got Power Platform API token"
+              USE_DATAVERSE=false
             fi
+            echo ""
+            
+            # ── Step 2: Fetch installed apps ──
+            echo "  📦 Step 2: Fetching installed apps..."
+            INSTALLED_RESPONSE=$(curl -s -w "\n%{http_code}" "https://api.powerplatform.com/appmanagement/environments/${ENV_ID}/applicationPackages?appInstallState=Installed&api-version=2022-03-01-preview" \
+              -H "Authorization: Bearer $ACCESS_TOKEN" \
+              -H "Accept: application/json")
+            
+            INST_HTTP=$(echo "$INSTALLED_RESPONSE" | tail -1)
+            INSTALLED_APPS=$(echo "$INSTALLED_RESPONSE" | head -n -1)
+            INSTALLED_COUNT=$(echo "$INSTALLED_APPS" | jq '.value | length' 2>/dev/null || echo "0")
+            
+            echo "  HTTP status: $INST_HTTP"
+            echo "  Installed apps found: $INSTALLED_COUNT"
+            
+            if [ "$INST_HTTP" != "200" ]; then
+              echo "  ❌ Failed to fetch installed apps"
+              ERROR_MSG=$(echo "$INSTALLED_APPS" | jq -r '.error.message // .message // empty' 2>/dev/null)
+              echo "  Error: $ERROR_MSG"
+              echo "  Full response: $(echo $INSTALLED_APPS | head -c 500)"
+              
+              curl -s -X PATCH "${SUPABASE_URL}/rest/v1/update_schedules?id=eq.${SCHEDULE_ID}" \
+                -H "apikey: $SUPABASE_SERVICE_KEY" \
+                -H "Authorization: Bearer $SUPABASE_SERVICE_KEY" \
+                -H "Content-Type: application/json" \
+                -d "{\"last_run_at\": \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\", \"last_run_status\": \"failed\"}" > /dev/null 2>&1
+              continue
+            fi
+            echo ""
+            
+            # ── Step 3: Fetch catalog apps ──
+            echo "  📦 Step 3: Fetching catalog apps..."
+            CATALOG_RESPONSE=$(curl -s -w "\n%{http_code}" "https://api.powerplatform.com/appmanagement/environments/${ENV_ID}/applicationPackages?api-version=2022-03-01-preview" \
+              -H "Authorization: Bearer $ACCESS_TOKEN" \
+              -H "Accept: application/json")
+            
+            CAT_HTTP=$(echo "$CATALOG_RESPONSE" | tail -1)
+            CATALOG_APPS=$(echo "$CATALOG_RESPONSE" | head -n -1)
+            CATALOG_COUNT=$(echo "$CATALOG_APPS" | jq '.value | length' 2>/dev/null || echo "0")
+            
+            echo "  HTTP status: $CAT_HTTP"
+            echo "  Catalog apps found: $CATALOG_COUNT"
+            echo ""
+            
+            # ── Step 4: Compare versions and update ──
+            echo "  🔍 Step 4: Comparing versions..."
+            
+            # Build results using temp file (avoid subshell variable loss)
+            RESULTS_FILE=$(mktemp)
+            echo "0 0" > "$RESULTS_FILE"
+            
+            echo "$INSTALLED_APPS" | jq -c '.value[]?' 2>/dev/null | while read installed; do
+              APP_ID=$(echo $installed | jq -r '.applicationId // empty')
+              APP_NAME=$(echo $installed | jq -r '.localizedName // .applicationName // "Unknown"')
+              INSTALLED_VERSION=$(echo $installed | jq -r '.version // "0.0.0"')
+              UNIQUE_NAME=$(echo $installed | jq -r '.uniqueName // empty')
+              
+              if [ -z "$APP_ID" ]; then continue; fi
+              
+              # Find latest version in catalog
+              CATALOG_VERSION=$(echo "$CATALOG_APPS" | jq -r --arg id "$APP_ID" '[.value[]? | select(.applicationId == $id)] | sort_by(.version) | last | .version // "0.0.0"')
+              CATALOG_UNIQUE=$(echo "$CATALOG_APPS" | jq -r --arg id "$APP_ID" '[.value[]? | select(.applicationId == $id)] | sort_by(.version) | last | .uniqueName // empty')
+              
+              if [ "$CATALOG_VERSION" = "0.0.0" ] || [ "$CATALOG_VERSION" = "$INSTALLED_VERSION" ]; then
+                continue
+              fi
+              
+              # Compare versions  
+              HIGHER=$(echo -e "$INSTALLED_VERSION\n$CATALOG_VERSION" | sort -V | tail -1)
+              if [ "$HIGHER" = "$CATALOG_VERSION" ] && [ "$HIGHER" != "$INSTALLED_VERSION" ]; then
+                echo "  🔄 UPDATE: $APP_NAME"
+                echo "     Current:  $INSTALLED_VERSION"
+                echo "     Catalog:  $CATALOG_VERSION"
+                
+                UPDATE_NAME="${CATALOG_UNIQUE:-$UNIQUE_NAME}"
+                echo "     Package:  $UPDATE_NAME"
+                
+                UPDATE_RESULT=$(curl -s -w "\n%{http_code}" -X POST "https://api.powerplatform.com/appmanagement/environments/${ENV_ID}/applicationPackages/${UPDATE_NAME}/install?api-version=2022-03-01-preview" \
+                  -H "Authorization: Bearer $ACCESS_TOKEN" \
+                  -H "Content-Type: application/json")
+                
+                UP_HTTP=$(echo "$UPDATE_RESULT" | tail -1)
+                UP_BODY=$(echo "$UPDATE_RESULT" | head -n -1)
+                
+                if [ "$UP_HTTP" -ge 200 ] 2>/dev/null && [ "$UP_HTTP" -lt 300 ] 2>/dev/null; then
+                  echo "     ✅ Update submitted (HTTP $UP_HTTP)"
+                  read u f < "$RESULTS_FILE"; echo "$((u+1)) $f" > "$RESULTS_FILE"
+                else
+                  echo "     ❌ Update failed (HTTP $UP_HTTP): $(echo $UP_BODY | head -c 200)"
+                  read u f < "$RESULTS_FILE"; echo "$u $((f+1))" > "$RESULTS_FILE"
+                fi
+              fi
+            done
+            
+            read UPDATED_COUNT FAILED_COUNT < "$RESULTS_FILE"
+            rm -f "$RESULTS_FILE"
+            
+            echo ""
+            echo "  📊 RESULTS: $UPDATED_COUNT updated, $FAILED_COUNT failed"
+            echo ""
+            
+            # Update Supabase with results
+            curl -s -X PATCH "${SUPABASE_URL}/rest/v1/update_schedules?id=eq.${SCHEDULE_ID}" \
+              -H "apikey: $SUPABASE_SERVICE_KEY" \
+              -H "Authorization: Bearer $SUPABASE_SERVICE_KEY" \
+              -H "Content-Type: application/json" \
+              -d "{\"last_run_at\": \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\", \"last_run_status\": \"success\"}" > /dev/null 2>&1
+            
+            echo "  ✅ Schedule $SCHEDULE_ID status updated in Supabase"
           done
           
           echo "🎉 Done processing schedules"
