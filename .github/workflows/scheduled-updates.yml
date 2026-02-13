@@ -2,300 +2,218 @@ name: Scheduled App Updates
 
 on:
   schedule:
-    # Run every hour at minute 5
     - cron: '5 * * * *'
-  workflow_dispatch: # Allow manual trigger for testing
+  workflow_dispatch:
 
 jobs:
   check-and-update:
     runs-on: ubuntu-latest
-    
+
     steps:
-      - name: Get enabled schedules from Supabase
-        id: get-schedules
+      - name: Fetch schedules and secrets
+        id: fetch
         env:
-          # Use service_role key to read secrets (bypasses RLS)
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
         run: |
-          # Fetch schedules with their secrets using service_role key
-          SCHEDULES=$(curl -s "https://fpekzltxukikaixebeeu.supabase.co/rest/v1/update_schedules?enabled=eq.true&select=*" \
+          echo "=== Fetching schedules ==="
+          SCHEDULES=$(curl -sf "https://fpekzltxukikaixebeeu.supabase.co/rest/v1/update_schedules?enabled=eq.true&select=*" \
             -H "apikey: $SUPABASE_SERVICE_KEY" \
-            -H "Authorization: Bearer $SUPABASE_SERVICE_KEY")
-          
-          # Fetch secrets from secure table
-          SECRETS=$(curl -s "https://fpekzltxukikaixebeeu.supabase.co/rest/v1/schedule_secrets?select=schedule_id,client_secret" \
+            -H "Authorization: Bearer $SUPABASE_SERVICE_KEY" || echo "[]")
+
+          SECRETS=$(curl -sf "https://fpekzltxukikaixebeeu.supabase.co/rest/v1/schedule_secrets?select=schedule_id,client_secret" \
             -H "apikey: $SUPABASE_SERVICE_KEY" \
-            -H "Authorization: Bearer $SUPABASE_SERVICE_KEY")
-          
-          # Handle empty secrets array
-          if [ -z "$SECRETS" ] || [ "$SECRETS" = "[]" ]; then
-            SECRETS="[]"
-          fi
-          
-          # Merge schedules with their secrets (compact to single line with -c)
-          # First try matching by schedule_id, then fallback to matching by client_id
-          MERGED=$(echo "$SCHEDULES" | jq -c --argjson secrets "$SECRETS" --argjson allSchedules "$SCHEDULES" '
-            (if $secrets == [] then {} else ($secrets | map({(.schedule_id | tostring): .client_secret}) | add) end) as $secretById |
-            # Build a client_id → secret map for fallback (from schedules that DO have a secret)
-            (if $secrets == [] then {} 
-             else 
-               [$allSchedules[] | select(.client_id != null) | {client_id, id: (.id | tostring)}] as $idMap |
-               ($idMap | map(select($secretById[.id] != null)) | map({(.client_id): $secretById[.id]}) | if length > 0 then add else {} end)
-             end) as $secretByClient |
-            . | map(
-              . + (
-                if $secretById[.id | tostring] then 
-                  {client_secret: $secretById[.id | tostring]}
-                elif .client_id and $secretByClient[.client_id] then 
-                  {client_secret: $secretByClient[.client_id]}
-                else {} end
-              )
+            -H "Authorization: Bearer $SUPABASE_SERVICE_KEY" || echo "[]")
+
+          [ -z "$SECRETS" ] && SECRETS="[]"
+          [ -z "$SCHEDULES" ] && SCHEDULES="[]"
+
+          # Build client_id-to-secret lookup from schedule+secrets join
+          # 1. Direct match by schedule_id
+          # 2. Fallback: find any secret for same client_id
+          MERGED=$(jq -n -c \
+            --argjson scheds "$SCHEDULES" \
+            --argjson secs "$SECRETS" '
+            ($secs | if length > 0 then map({(.schedule_id|tostring): .client_secret}) | add else {} end) as $byId |
+            # Build client_id -> secret map by joining schedules that have a secret
+            ([$scheds[] | select(.client_id != null) |
+              {cid: .client_id, sec: $byId[.id|tostring]}
+            ] | map(select(.sec != null)) |
+              if length > 0 then map({(.cid): .sec}) | add else {} end
+            ) as $byCid |
+            $scheds | map(
+              . + {client_secret: (
+                $byId[.id|tostring] //
+                $byCid[.client_id] //
+                null
+              )}
             )
           ')
-          
-          # Use delimiter for multiline-safe output
-          echo "schedules<<EOF" >> $GITHUB_OUTPUT
+
+          COUNT=$(echo "$MERGED" | jq 'length')
+          echo "Found $COUNT enabled schedule(s)"
+
+          echo "data<<ENDOFDATA" >> $GITHUB_OUTPUT
           echo "$MERGED" >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
-          echo "Found $(echo "$MERGED" | jq length) schedules"
-          
-      - name: Process schedules
+          echo "ENDOFDATA" >> $GITHUB_OUTPUT
+
+      - name: Process each schedule
         env:
-          SCHEDULES: ${{ steps.get-schedules.outputs.schedules }}
-          SUPABASE_URL: https://fpekzltxukikaixebeeu.supabase.co
-          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          DATA: ${{ steps.fetch.outputs.data }}
+          SUPA_URL: https://fpekzltxukikaixebeeu.supabase.co
+          SUPA_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
         run: |
-          echo "========================================="
-          echo "🕐 CURRENT TIME INFO"
-          echo "========================================="
-          echo "UTC:     $(date -u '+%A %Y-%m-%d %H:%M:%S')"
-          echo "UTC day: $(date -u +%w), UTC hour: $(date -u +%H):00"
-          echo ""
-          
-          # Check if schedules is empty or null
-          if [ -z "$SCHEDULES" ] || [ "$SCHEDULES" = "[]" ] || [ "$SCHEDULES" = "null" ]; then
-            echo "❌ No enabled schedules found. Check SUPABASE_SERVICE_KEY secret."
-            echo "Raw SCHEDULES value: '$SCHEDULES'"
+          set +e
+
+          if [ -z "$DATA" ] || [ "$DATA" = "[]" ] || [ "$DATA" = "null" ]; then
+            echo "No enabled schedules."
             exit 0
           fi
-          
-          SCHEDULE_COUNT=$(echo "$SCHEDULES" | jq 'length' 2>/dev/null || echo "0")
-          echo "📋 Found $SCHEDULE_COUNT enabled schedule(s)"
+
+          update_status() {
+            local sid="$1" status="$2"
+            curl -s -X PATCH "$SUPA_URL/rest/v1/update_schedules?id=eq.$sid" \
+              -H "apikey: $SUPA_KEY" -H "Authorization: Bearer $SUPA_KEY" \
+              -H "Content-Type: application/json" \
+              -d "{\"last_run_at\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\",\"last_run_status\":\"$status\"}" >/dev/null 2>&1
+          }
+
+          COUNT=$(echo "$DATA" | jq 'length')
+          echo "Processing $COUNT schedule(s)..."
           echo ""
-          
-          # Parse and process each schedule
-          echo "$SCHEDULES" | jq -c '.[]' 2>/dev/null | while read schedule; do
-            SCHEDULE_DAY=$(echo $schedule | jq -r '.day_of_week')
-            SCHEDULE_TIME=$(echo $schedule | jq -r '.time_utc')
-            SCHEDULE_TZ=$(echo $schedule | jq -r '.timezone // "UTC"')
-            ORG_URL=$(echo $schedule | jq -r '.org_url')
-            ENV_ID=$(echo $schedule | jq -r '.environment_id')
-            USER_EMAIL=$(echo $schedule | jq -r '.user_email')
-            SCHEDULE_ID=$(echo $schedule | jq -r '.id')
-            
-            # Get per-user credentials from schedule
-            USER_CLIENT_ID=$(echo $schedule | jq -r '.client_id // empty')
-            USER_CLIENT_SECRET=$(echo $schedule | jq -r '.client_secret // empty')
-            USER_TENANT_ID=$(echo $schedule | jq -r '.tenant_id // empty')
-            
-            # Get current time in the schedule's timezone
-            CURRENT_LOCAL_DAY=$(TZ="$SCHEDULE_TZ" date +%w)
-            CURRENT_LOCAL_HOUR=$(TZ="$SCHEDULE_TZ" date +%H):00
-            CURRENT_LOCAL_TIME=$(TZ="$SCHEDULE_TZ" date '+%A %Y-%m-%d %H:%M:%S %Z')
-            
-            echo "========================================="
-            echo "📅 SCHEDULE #$SCHEDULE_ID ($USER_EMAIL)"
-            echo "========================================="
-            echo "  Org URL:       $ORG_URL"
-            echo "  Env ID:        $ENV_ID"
-            echo "  Schedule:      Day $SCHEDULE_DAY at $SCHEDULE_TIME ($SCHEDULE_TZ)"
-            echo "  Current local: Day $CURRENT_LOCAL_DAY at $CURRENT_LOCAL_HOUR ($CURRENT_LOCAL_TIME)"
-            echo "  Client ID:     ${USER_CLIENT_ID:0:8}..."
-            echo "  Tenant ID:     ${USER_TENANT_ID:0:8}..."
-            echo "  Has secret:    $([ -n '$USER_CLIENT_SECRET' ] && echo 'Yes' || echo 'No')"
-            echo ""
-            
-            # Validate credentials
-            if [ -z "$USER_CLIENT_ID" ] || [ -z "$USER_CLIENT_SECRET" ]; then
-              echo "  ⚠️ SKIPPED: Missing credentials (client_id or client_secret empty)"
-              echo ""
-              continue
+
+          # Write to file so we iterate in main shell (no subshell variable loss)
+          TMPFILE=$(mktemp)
+          echo "$DATA" | jq -c '.[]' > "$TMPFILE"
+
+          while IFS= read -r sched; do
+            ID=$(echo "$sched" | jq -r '.id')
+            DAY=$(echo "$sched" | jq -r '.day_of_week')
+            TIME=$(echo "$sched" | jq -r '.time_utc')
+            TZ_NAME=$(echo "$sched" | jq -r '.timezone // "UTC"')
+            ORG=$(echo "$sched" | jq -r '.org_url')
+            ENV=$(echo "$sched" | jq -r '.environment_id')
+            CID=$(echo "$sched" | jq -r '.client_id // empty')
+            CSEC=$(echo "$sched" | jq -r '.client_secret // empty')
+            TID=$(echo "$sched" | jq -r '.tenant_id // empty')
+
+            echo "========================================"
+            echo "SCHEDULE #$ID"
+            echo "  Env:  $ENV"
+            echo "  Org:  $ORG"
+            echo "  Want: day=$DAY time=$TIME tz=$TZ_NAME"
+
+            NOW_DAY=$(TZ="$TZ_NAME" date +%w)
+            NOW_HOUR=$(TZ="$TZ_NAME" date +%H):00
+            NOW_FULL=$(TZ="$TZ_NAME" date '+%A %H:%M %Z')
+            echo "  Now:  day=$NOW_DAY time=$NOW_HOUR ($NOW_FULL)"
+
+            # --- Credentials check ---
+            if [ -z "$CID" ] || [ -z "$TID" ]; then
+              echo "  SKIP: missing client_id or tenant_id"
+              update_status "$ID" "no_credentials"
+              echo ""; continue
             fi
-            
-            if [ -z "$USER_TENANT_ID" ]; then
-              echo "  ⚠️ SKIPPED: Missing tenant_id"
-              echo ""
-              continue
+            if [ -z "$CSEC" ] || [ "$CSEC" = "null" ]; then
+              echo "  SKIP: no client_secret found"
+              update_status "$ID" "no_secret"
+              echo ""; continue
             fi
-            
-            # Check if schedule matches current LOCAL time (in user's timezone)
-            if [ "$SCHEDULE_DAY" != "$CURRENT_LOCAL_DAY" ] || [ "$SCHEDULE_TIME" != "$CURRENT_LOCAL_HOUR" ]; then
-              echo "  ⏭️ SKIPPED: Time doesn't match"
-              echo "     Expected: Day=$SCHEDULE_DAY Time=$SCHEDULE_TIME"
-              echo "     Current:  Day=$CURRENT_LOCAL_DAY Time=$CURRENT_LOCAL_HOUR"
-              echo ""
-              
-              # Still update Supabase to show the workflow DID run (just not matching time)
-              curl -s -X PATCH "${SUPABASE_URL}/rest/v1/update_schedules?id=eq.${SCHEDULE_ID}" \
-                -H "apikey: $SUPABASE_SERVICE_KEY" \
-                -H "Authorization: Bearer $SUPABASE_SERVICE_KEY" \
-                -H "Content-Type: application/json" \
-                -d "{\"last_run_at\": \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\", \"last_run_status\": \"skipped\"}" > /dev/null 2>&1
-              continue
+            echo "  Credentials: OK (cid=${CID:0:8}...)"
+
+            # --- Time check ---
+            if [ "$DAY" != "$NOW_DAY" ] || [ "$TIME" != "$NOW_HOUR" ]; then
+              echo "  SKIP: time mismatch (want day=$DAY $TIME, got day=$NOW_DAY $NOW_HOUR)"
+              update_status "$ID" "skipped"
+              echo ""; continue
             fi
-            
-            echo "  ✅ TIME MATCH! Processing updates..."
-            echo ""
-            
-            # ── Step 1: Get access token for Power Platform API ──
-            echo "  🔑 Step 1: Acquiring token for Power Platform API..."
-            TOKEN_RESPONSE=$(curl -s -X POST "https://login.microsoftonline.com/${USER_TENANT_ID}/oauth2/v2.0/token" \
-              -H "Content-Type: application/x-www-form-urlencoded" \
-              -d "client_id=${USER_CLIENT_ID}&client_secret=${USER_CLIENT_SECRET}&grant_type=client_credentials&scope=https://api.powerplatform.com/.default")
-            
-            ACCESS_TOKEN=$(echo $TOKEN_RESPONSE | jq -r '.access_token // empty')
-            TOKEN_ERROR=$(echo $TOKEN_RESPONSE | jq -r '.error_description // .error // empty')
-            
-            if [ -z "$ACCESS_TOKEN" ]; then
-              echo "  ❌ FAILED to get Power Platform API token"
-              echo "  Error: $TOKEN_ERROR"
-              echo ""
-              
-              # Try Dataverse token as fallback for diagnostics
-              echo "  🔑 Trying Dataverse token (${ORG_URL}/.default)..."
-              DV_TOKEN_RESPONSE=$(curl -s -X POST "https://login.microsoftonline.com/${USER_TENANT_ID}/oauth2/v2.0/token" \
-                -H "Content-Type: application/x-www-form-urlencoded" \
-                -d "client_id=${USER_CLIENT_ID}&client_secret=${USER_CLIENT_SECRET}&grant_type=client_credentials&scope=${ORG_URL}/.default")
-              DV_TOKEN=$(echo $DV_TOKEN_RESPONSE | jq -r '.access_token // empty')
-              DV_ERROR=$(echo $DV_TOKEN_RESPONSE | jq -r '.error_description // .error // empty')
-              
-              if [ -n "$DV_TOKEN" ]; then
-                echo "  ✅ Dataverse token works! Using Dataverse API for updates..."
-                ACCESS_TOKEN="$DV_TOKEN"
-                USE_DATAVERSE=true
-              else
-                echo "  ❌ Dataverse token also failed: $DV_ERROR"
-                
-                curl -s -X PATCH "${SUPABASE_URL}/rest/v1/update_schedules?id=eq.${SCHEDULE_ID}" \
-                  -H "apikey: $SUPABASE_SERVICE_KEY" \
-                  -H "Authorization: Bearer $SUPABASE_SERVICE_KEY" \
-                  -H "Content-Type: application/json" \
-                  -d "{\"last_run_at\": \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\", \"last_run_status\": \"failed\"}" > /dev/null 2>&1
-                continue
-              fi
-            else
-              echo "  ✅ Got Power Platform API token"
-              USE_DATAVERSE=false
+
+            echo "  >>> TIME MATCH — running updates <<<"
+
+            # --- Get token ---
+            echo "  Acquiring token..."
+            TRESP=$(curl -s -X POST "https://login.microsoftonline.com/$TID/oauth2/v2.0/token" \
+              -d "client_id=$CID&client_secret=$CSEC&grant_type=client_credentials&scope=https://api.powerplatform.com/.default")
+            TOKEN=$(echo "$TRESP" | jq -r '.access_token // empty')
+
+            if [ -z "$TOKEN" ]; then
+              TERR=$(echo "$TRESP" | jq -r '.error_description // .error // "unknown"')
+              echo "  Token FAILED: $TERR"
+              update_status "$ID" "token_failed"
+              echo ""; continue
             fi
-            echo ""
-            
-            # ── Step 2: Fetch installed apps ──
-            echo "  📦 Step 2: Fetching installed apps..."
-            INSTALLED_RESPONSE=$(curl -s -w "\n%{http_code}" "https://api.powerplatform.com/appmanagement/environments/${ENV_ID}/applicationPackages?appInstallState=Installed&api-version=2022-03-01-preview" \
-              -H "Authorization: Bearer $ACCESS_TOKEN" \
-              -H "Accept: application/json")
-            
-            INST_HTTP=$(echo "$INSTALLED_RESPONSE" | tail -1)
-            INSTALLED_APPS=$(echo "$INSTALLED_RESPONSE" | head -n -1)
-            INSTALLED_COUNT=$(echo "$INSTALLED_APPS" | jq '.value | length' 2>/dev/null || echo "0")
-            
-            echo "  HTTP status: $INST_HTTP"
-            echo "  Installed apps found: $INSTALLED_COUNT"
-            
-            if [ "$INST_HTTP" != "200" ]; then
-              echo "  ❌ Failed to fetch installed apps"
-              ERROR_MSG=$(echo "$INSTALLED_APPS" | jq -r '.error.message // .message // empty' 2>/dev/null)
-              echo "  Error: $ERROR_MSG"
-              echo "  Full response: $(echo $INSTALLED_APPS | head -c 500)"
-              
-              curl -s -X PATCH "${SUPABASE_URL}/rest/v1/update_schedules?id=eq.${SCHEDULE_ID}" \
-                -H "apikey: $SUPABASE_SERVICE_KEY" \
-                -H "Authorization: Bearer $SUPABASE_SERVICE_KEY" \
-                -H "Content-Type: application/json" \
-                -d "{\"last_run_at\": \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\", \"last_run_status\": \"failed\"}" > /dev/null 2>&1
-              continue
+            echo "  Token: OK"
+
+            # --- Fetch installed apps ---
+            echo "  Fetching installed apps..."
+            INST=$(curl -s "https://api.powerplatform.com/appmanagement/environments/$ENV/applicationPackages?appInstallState=Installed&api-version=2022-03-01-preview" \
+              -H "Authorization: Bearer $TOKEN")
+            INST_COUNT=$(echo "$INST" | jq '[.value[]?] | length' 2>/dev/null)
+
+            if [ -z "$INST_COUNT" ] || [ "$INST_COUNT" = "0" ] || [ "$INST_COUNT" = "null" ]; then
+              echo "  No installed apps or API error"
+              echo "  Response preview: $(echo "$INST" | head -c 200)"
+              update_status "$ID" "api_error"
+              echo ""; continue
             fi
-            echo ""
-            
-            # ── Step 3: Fetch catalog apps ──
-            echo "  📦 Step 3: Fetching catalog apps..."
-            CATALOG_RESPONSE=$(curl -s -w "\n%{http_code}" "https://api.powerplatform.com/appmanagement/environments/${ENV_ID}/applicationPackages?api-version=2022-03-01-preview" \
-              -H "Authorization: Bearer $ACCESS_TOKEN" \
-              -H "Accept: application/json")
-            
-            CAT_HTTP=$(echo "$CATALOG_RESPONSE" | tail -1)
-            CATALOG_APPS=$(echo "$CATALOG_RESPONSE" | head -n -1)
-            CATALOG_COUNT=$(echo "$CATALOG_APPS" | jq '.value | length' 2>/dev/null || echo "0")
-            
-            echo "  HTTP status: $CAT_HTTP"
-            echo "  Catalog apps found: $CATALOG_COUNT"
-            echo ""
-            
-            # ── Step 4: Compare versions and update ──
-            echo "  🔍 Step 4: Comparing versions..."
-            
-            # Build results using temp file (avoid subshell variable loss)
-            RESULTS_FILE=$(mktemp)
-            echo "0 0" > "$RESULTS_FILE"
-            
-            echo "$INSTALLED_APPS" | jq -c '.value[]?' 2>/dev/null | while read installed; do
-              APP_ID=$(echo $installed | jq -r '.applicationId // empty')
-              APP_NAME=$(echo $installed | jq -r '.localizedName // .applicationName // "Unknown"')
-              INSTALLED_VERSION=$(echo $installed | jq -r '.version // "0.0.0"')
-              UNIQUE_NAME=$(echo $installed | jq -r '.uniqueName // empty')
-              
-              if [ -z "$APP_ID" ]; then continue; fi
-              
-              # Find latest version in catalog
-              CATALOG_VERSION=$(echo "$CATALOG_APPS" | jq -r --arg id "$APP_ID" '[.value[]? | select(.applicationId == $id)] | sort_by(.version) | last | .version // "0.0.0"')
-              CATALOG_UNIQUE=$(echo "$CATALOG_APPS" | jq -r --arg id "$APP_ID" '[.value[]? | select(.applicationId == $id)] | sort_by(.version) | last | .uniqueName // empty')
-              
-              if [ "$CATALOG_VERSION" = "0.0.0" ] || [ "$CATALOG_VERSION" = "$INSTALLED_VERSION" ]; then
-                continue
-              fi
-              
-              # Compare versions  
-              HIGHER=$(echo -e "$INSTALLED_VERSION\n$CATALOG_VERSION" | sort -V | tail -1)
-              if [ "$HIGHER" = "$CATALOG_VERSION" ] && [ "$HIGHER" != "$INSTALLED_VERSION" ]; then
-                echo "  🔄 UPDATE: $APP_NAME"
-                echo "     Current:  $INSTALLED_VERSION"
-                echo "     Catalog:  $CATALOG_VERSION"
-                
-                UPDATE_NAME="${CATALOG_UNIQUE:-$UNIQUE_NAME}"
-                echo "     Package:  $UPDATE_NAME"
-                
-                UPDATE_RESULT=$(curl -s -w "\n%{http_code}" -X POST "https://api.powerplatform.com/appmanagement/environments/${ENV_ID}/applicationPackages/${UPDATE_NAME}/install?api-version=2022-03-01-preview" \
-                  -H "Authorization: Bearer $ACCESS_TOKEN" \
+            echo "  Installed apps: $INST_COUNT"
+
+            # --- Fetch catalog ---
+            echo "  Fetching catalog..."
+            CAT=$(curl -s "https://api.powerplatform.com/appmanagement/environments/$ENV/applicationPackages?api-version=2022-03-01-preview" \
+              -H "Authorization: Bearer $TOKEN")
+            CAT_COUNT=$(echo "$CAT" | jq '[.value[]?] | length' 2>/dev/null)
+            echo "  Catalog apps: $CAT_COUNT"
+
+            # --- Compare and update ---
+            UPDATED=0
+            FAILED=0
+
+            # Write installed list to file (avoid subshell)
+            APP_FILE=$(mktemp)
+            echo "$INST" | jq -c '.value[]?' > "$APP_FILE" 2>/dev/null
+
+            while IFS= read -r app; do
+              AID=$(echo "$app" | jq -r '.applicationId // empty')
+              [ -z "$AID" ] && continue
+
+              ANAME=$(echo "$app" | jq -r '.localizedName // .applicationName // "?"')
+              AVER=$(echo "$app" | jq -r '.version // "0"')
+              AUNAME=$(echo "$app" | jq -r '.uniqueName // empty')
+
+              CVER=$(echo "$CAT" | jq -r --arg id "$AID" \
+                '[.value[]? | select(.applicationId == $id)] | sort_by(.version) | last | .version // empty')
+              CUNAME=$(echo "$CAT" | jq -r --arg id "$AID" \
+                '[.value[]? | select(.applicationId == $id)] | sort_by(.version) | last | .uniqueName // empty')
+
+              [ -z "$CVER" ] && continue
+              [ "$CVER" = "$AVER" ] && continue
+
+              HIGHER=$(printf '%s\n%s' "$AVER" "$CVER" | sort -V | tail -1)
+              if [ "$HIGHER" = "$CVER" ] && [ "$HIGHER" != "$AVER" ]; then
+                PNAME="${CUNAME:-$AUNAME}"
+                echo "  UPDATE: $ANAME  $AVER -> $CVER  (pkg=$PNAME)"
+
+                HTTP=$(curl -s -o /dev/null -w "%{http_code}" -X POST \
+                  "https://api.powerplatform.com/appmanagement/environments/$ENV/applicationPackages/$PNAME/install?api-version=2022-03-01-preview" \
+                  -H "Authorization: Bearer $TOKEN" \
                   -H "Content-Type: application/json")
-                
-                UP_HTTP=$(echo "$UPDATE_RESULT" | tail -1)
-                UP_BODY=$(echo "$UPDATE_RESULT" | head -n -1)
-                
-                if [ "$UP_HTTP" -ge 200 ] 2>/dev/null && [ "$UP_HTTP" -lt 300 ] 2>/dev/null; then
-                  echo "     ✅ Update submitted (HTTP $UP_HTTP)"
-                  read u f < "$RESULTS_FILE"; echo "$((u+1)) $f" > "$RESULTS_FILE"
+
+                if [ "$HTTP" -ge 200 ] 2>/dev/null && [ "$HTTP" -lt 300 ] 2>/dev/null; then
+                  echo "    -> Submitted (HTTP $HTTP)"
+                  UPDATED=$((UPDATED + 1))
                 else
-                  echo "     ❌ Update failed (HTTP $UP_HTTP): $(echo $UP_BODY | head -c 200)"
-                  read u f < "$RESULTS_FILE"; echo "$u $((f+1))" > "$RESULTS_FILE"
+                  echo "    -> Failed (HTTP $HTTP)"
+                  FAILED=$((FAILED + 1))
                 fi
               fi
-            done
-            
-            read UPDATED_COUNT FAILED_COUNT < "$RESULTS_FILE"
-            rm -f "$RESULTS_FILE"
-            
+            done < "$APP_FILE"
+            rm -f "$APP_FILE"
+
+            echo "  Results: $UPDATED updated, $FAILED failed"
+            update_status "$ID" "success"
             echo ""
-            echo "  📊 RESULTS: $UPDATED_COUNT updated, $FAILED_COUNT failed"
-            echo ""
-            
-            # Update Supabase with results
-            curl -s -X PATCH "${SUPABASE_URL}/rest/v1/update_schedules?id=eq.${SCHEDULE_ID}" \
-              -H "apikey: $SUPABASE_SERVICE_KEY" \
-              -H "Authorization: Bearer $SUPABASE_SERVICE_KEY" \
-              -H "Content-Type: application/json" \
-              -d "{\"last_run_at\": \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\", \"last_run_status\": \"success\"}" > /dev/null 2>&1
-            
-            echo "  ✅ Schedule $SCHEDULE_ID status updated in Supabase"
-          done
-          
-          echo "🎉 Done processing schedules"
+
+          done < "$TMPFILE"
+          rm -f "$TMPFILE"
+
+          echo "=== ALL DONE ==="
