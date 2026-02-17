@@ -4,6 +4,11 @@ on:
   schedule:
     - cron: '0 * * * *'
   workflow_dispatch:
+    inputs:
+      force_all:
+        description: 'Process ALL schedules regardless of time match'
+        type: boolean
+        default: true
 
 jobs:
   check-and-update:
@@ -38,6 +43,7 @@ jobs:
           DATA: ${{ steps.fetch.outputs.data }}
           SUPA_URL: https://fpekzltxukikaixebeeu.supabase.co
           SUPA_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          FORCE_ALL: ${{ github.event.inputs.force_all || 'false' }}
         run: |
           set +e
 
@@ -105,13 +111,15 @@ jobs:
             NOW_FULL=$(date -u '+%A %H:%M UTC')
             echo "  Now (UTC): day=$NOW_DAY time=$NOW_HOUR ($NOW_FULL)"
 
-            # --- Time check (do this FIRST to avoid unnecessary cred lookups) ---
-            if [ "$DAY" != "$NOW_DAY" ] || [ "$TIME" != "$NOW_HOUR" ]; then
+            # --- Time check (skip if manually dispatched with force_all) ---
+            if [ "$FORCE_ALL" = "true" ]; then
+              echo "  >>> FORCE_ALL enabled — skipping time check <<<"
+            elif [ "$DAY" != "$NOW_DAY" ] || [ "$TIME" != "$NOW_HOUR" ]; then
               echo "  SKIP: time mismatch (want day=$DAY $TIME, got day=$NOW_DAY $NOW_HOUR)"
               echo ""; continue
+            else
+              echo "  >>> TIME MATCH — proceeding with credentials <<<"
             fi
-
-            echo "  >>> TIME MATCH — proceeding with credentials <<<"
 
             # --- Credentials check ---
             if [ -z "$CID" ] || [ -z "$TID" ]; then
