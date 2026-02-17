@@ -2201,9 +2201,11 @@ async function loadSchedule() {
             if (schedules.length > 0) {
                 const schedule = schedules[0];
                 document.getElementById('scheduleEnabled').checked = schedule.enabled;
-                // Use display values if available (user's original selection), otherwise fall back to UTC values
-                document.getElementById('scheduleDay').value = schedule.display_day !== undefined ? schedule.display_day : schedule.day_of_week;
-                document.getElementById('scheduleTime').value = schedule.display_time || schedule.time_utc;
+                
+                // Convert UTC values back to local timezone for display
+                const localSchedule = convertFromUTC(schedule.day_of_week, schedule.time_utc, schedule.timezone || 'UTC');
+                document.getElementById('scheduleDay').value = localSchedule.day_of_week_local;
+                document.getElementById('scheduleTime').value = localSchedule.time_local;
                 document.getElementById('scheduleTimezone').value = schedule.timezone || 'UTC';
                 // Secret is stored securely - just indicate it's set
                 const secretInput = document.getElementById('scheduleClientSecret');
@@ -2244,11 +2246,10 @@ function updateScheduleStatus(schedule) {
     
     const days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
     
-    // Show the user's display values (what they selected)
-    const displayDay = schedule.display_day !== undefined ? schedule.display_day : schedule.day_of_week;
-    const displayTime = schedule.display_time || schedule.time_utc;
-    const dayName = days[displayDay];
-    const timeDisplay = formatTimeDisplay(displayTime);
+    // Convert UTC values back to local timezone for display
+    const localSchedule = convertFromUTC(schedule.day_of_week, schedule.time_utc, schedule.timezone || 'UTC');
+    const dayName = days[localSchedule.day_of_week_local];
+    const timeDisplay = formatTimeDisplay(localSchedule.time_local);
     
     // Also show UTC for clarity
     const utcDayName = days[schedule.day_of_week];
@@ -2256,7 +2257,7 @@ function updateScheduleStatus(schedule) {
     const lastRun = schedule.last_run_at ? new Date(schedule.last_run_at).toLocaleString() : 'Never';
     
     // If UTC is different from display, show both
-    const showUtcInfo = (schedule.day_of_week !== displayDay || schedule.time_utc !== displayTime);
+    const showUtcInfo = (schedule.day_of_week !== localSchedule.day_of_week_local || schedule.time_utc !== localSchedule.time_local);
     
     statusEl.innerHTML = `<i class="fas fa-check-circle"></i> Scheduled: Every <strong>${dayName}</strong> at <strong>${timeDisplay}</strong> (${schedule.timezone || 'UTC'})` +
         (showUtcInfo ? `<br><small style="color: #6b7280;">Runs at: ${utcDayName} ${utcTimeDisplay} UTC</small>` : '') +
@@ -2356,6 +2357,56 @@ function convertToUTC(dayOfWeek, time, timezone) {
     };
 }
 
+/**
+ * Convert UTC day and time to local timezone
+ * @param {number} dayOfWeekUtc - Day of week in UTC (0=Sunday, 6=Saturday)
+ * @param {string} timeUtc - Time in HH:MM format in UTC
+ * @param {string} timezone - IANA timezone (e.g., 'America/New_York')
+ * @returns {object} { day_of_week_local, time_local } - Converted to local timezone
+ */
+function convertFromUTC(dayOfWeekUtc, timeUtc, timezone) {
+    // Parse the UTC time
+    const [hours, minutes] = timeUtc.split(':').map(Number);
+    
+    // Create a UTC date with the specified day and time
+    const now = new Date();
+    const currentDay = now.getUTCDay();
+    let daysUntilTarget = (dayOfWeekUtc - currentDay + 7) % 7;
+    if (daysUntilTarget === 0) daysUntilTarget = 7; // Next week if today
+    
+    const utcDate = new Date(now);
+    utcDate.setUTCDate(now.getUTCDate() + daysUntilTarget);
+    utcDate.setUTCHours(hours, minutes, 0, 0);
+    
+    // Format this UTC date in the target timezone
+    const formatter = new Intl.DateTimeFormat('en-CA', {
+        timeZone: timezone,
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+        hour12: false,
+        weekday: 'short'
+    });
+    
+    const parts = formatter.formatToParts(utcDate);
+    const partsMap = {};
+    parts.forEach(p => { if (p.type !== 'literal') partsMap[p.type] = p.value; });
+    
+    const localHour = parseInt(partsMap.hour, 10);
+    const localMinute = parseInt(partsMap.minute, 10);
+    
+    // Get the day of week in the local timezone
+    const weekdayMap = { 'Sun': 0, 'Mon': 1, 'Tue': 2, 'Wed': 3, 'Thu': 4, 'Fri': 5, 'Sat': 6 };
+    const localDay = weekdayMap[partsMap.weekday] ?? dayOfWeekUtc;
+    
+    return {
+        day_of_week_local: localDay,
+        time_local: `${localHour.toString().padStart(2, '0')}:${localMinute.toString().padStart(2, '0')}`
+    };
+}
+
 async function saveSchedule() {
     const cfg = getSupabaseConfig();
     if (!cfg) {
@@ -2393,8 +2444,6 @@ async function saveSchedule() {
         day_of_week: utcSchedule.day_of_week_utc,  // CONVERTED to UTC
         time_utc: utcSchedule.time_utc,             // CONVERTED to UTC
         timezone: selectedTimezone,                 // Store original timezone for display
-        display_day: selectedDay,                   // Store original selection for UI
-        display_time: selectedTime,                 // Store original selection for UI
         client_id: getCurrentClientId(),
         tenant_id: getCurrentTenantId(),
         updated_at: new Date().toISOString()
