@@ -126,7 +126,21 @@ jobs:
                 -H "apikey: $SUPA_KEY" -H "Authorization: Bearer $SUPA_KEY" | jq -r '.[0].client_secret // empty')
             fi
             if [ -z "$CSEC" ] || [ "$CSEC" = "null" ]; then
-              echo "  SKIP: no client_secret found (checked update_schedules and schedule_secrets)"
+              # Fallback: find secret from another schedule with same client_id + user_email
+              echo "  Still no secret. Looking for secret from another schedule with same client_id..."
+              USER_EMAIL=$(echo "$sched" | jq -r '.user_email // empty')
+              CSEC=$(curl -sf "$SUPA_URL/rest/v1/update_schedules?user_email=eq.$(echo "$USER_EMAIL" | jq -Rr @uri)&client_id=eq.$CID&has_secret=eq.true&client_secret=not.is.null&select=client_secret&limit=1" \
+                -H "apikey: $SUPA_KEY" -H "Authorization: Bearer $SUPA_KEY" | jq -r '.[0].client_secret // empty')
+              if [ -n "$CSEC" ] && [ "$CSEC" != "null" ]; then
+                echo "  Found secret from another schedule! Copying to this one..."
+                curl -s -X PATCH "$SUPA_URL/rest/v1/update_schedules?id=eq.$ID" \
+                  -H "apikey: $SUPA_KEY" -H "Authorization: Bearer $SUPA_KEY" \
+                  -H "Content-Type: application/json" \
+                  -d "{\"client_secret\":\"$CSEC\"}" >/dev/null 2>&1
+              fi
+            fi
+            if [ -z "$CSEC" ] || [ "$CSEC" = "null" ]; then
+              echo "  SKIP: no client_secret found anywhere (update_schedules, schedule_secrets, or sibling schedules)"
               update_status "$ID" "no_secret"
               echo ""; continue
             fi

@@ -2520,8 +2520,22 @@ async function saveSchedule() {
                 }
             );
             
-            // If new secret provided, save it to the secure secrets table
+            // If new secret provided, save it directly to the schedule record AND the secure secrets table
             if (resp.ok && newSecret) {
+                // Primary: save directly to update_schedules.client_secret (workflow reads this)
+                await fetch(
+                    `${cfg.url}/rest/v1/update_schedules?id=eq.${scheduleId}`,
+                    {
+                        method: 'PATCH',
+                        headers: {
+                            'apikey': cfg.key,
+                            'Authorization': `Bearer ${cfg.key}`,
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify({ client_secret: newSecret, has_secret: true })
+                    }
+                );
+                // Secondary: also try schedule_secrets table
                 await saveSecretSecurely(cfg, scheduleId, newSecret);
             }
         } else {
@@ -2541,10 +2555,24 @@ async function saveSchedule() {
                 }
             );
             
-            // Save secret to secure secrets table
+            // Save secret directly to the schedule record AND secure secrets table
             if (resp.ok && newSecret) {
                 const savedSchedule = await resp.json();
                 const scheduleId = Array.isArray(savedSchedule) ? savedSchedule[0].id : savedSchedule.id;
+                // Primary: save directly to update_schedules.client_secret (workflow reads this)
+                await fetch(
+                    `${cfg.url}/rest/v1/update_schedules?id=eq.${scheduleId}`,
+                    {
+                        method: 'PATCH',
+                        headers: {
+                            'apikey': cfg.key,
+                            'Authorization': `Bearer ${cfg.key}`,
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify({ client_secret: newSecret, has_secret: true })
+                    }
+                );
+                // Secondary: also try schedule_secrets table
                 await saveSecretSecurely(cfg, scheduleId, newSecret);
                 // Re-wrap for later use
                 resp = { ok: true, json: async () => savedSchedule };
