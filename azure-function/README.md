@@ -91,19 +91,18 @@ az functionapp create \
 
 ### 4. Configure Function App Settings
 
+The Azure Function only needs Supabase credentials. Azure AD credentials (tenant_id, client_id, client_secret) are read **per-schedule** from the Supabase `update_schedules` and `schedule_secrets` tables — the same credentials the user enters in the UI.
+
 ```bash
 az functionapp config appsettings set \
   --name fn-d365-app-updater \
   --resource-group rg-d365-app-updater \
   --settings \
-    "AZURE_TENANT_ID=<your-tenant-id>" \
-    "AZURE_CLIENT_ID=<your-client-id>" \
-    "AZURE_CLIENT_SECRET=<your-client-secret>" \
     "SUPABASE_URL=https://your-project.supabase.co" \
-    "SUPABASE_KEY=<your-service-role-key>"
+    "SUPABASE_KEY=<your-supabase-service-role-key>"
 ```
 
-> 💡 Use the **service_role** key (not anon) for the Azure Function so it can update `last_run_at` and `last_run_status`.
+> 💡 Use the **service_role** key (not anon) so the Function can read `schedule_secrets` and update `last_run_at`.
 
 ### 5. Deploy the Function
 
@@ -130,9 +129,11 @@ func azure functionapp publish fn-d365-app-updater
 - **Logic**:
   1. Query Supabase for enabled schedules where `day_of_week` and `time_utc` match current time
   2. For each matching schedule:
-     - Authenticate as service principal
-     - Get list of apps with available updates
-     - Update all apps
+     - Read `tenant_id` and `client_id` from the schedule record
+     - Read `client_secret` from the `schedule_secrets` table (fallback: `update_schedules.client_secret`)
+     - Authenticate to Power Platform API using those per-schedule credentials
+     - Get list of apps with available updates (same API as the "Update All Apps" button)
+     - Update all apps (same POST endpoint as the button)
      - Log results back to Supabase
 
 ### Schedule Matching

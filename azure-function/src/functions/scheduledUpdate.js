@@ -1,333 +1,301 @@
 const { app } = require('@azure/functions');
 const { ClientSecretCredential } = require('@azure/identity');
 
-// Configuration from environment
-const config = {
-    tenantId: process.env.AZURE_TENANT_ID,
-    clientId: process.env.AZURE_CLIENT_ID,
-    clientSecret: process.env.AZURE_CLIENT_SECRET,
-    supabaseUrl: process.env.SUPABASE_URL,
-    supabaseKey: process.env.SUPABASE_KEY
-};
+// Supabase configuration (only these need to be in env vars)
+const supabaseUrl = process.env.SUPABASE_URL;
+const supabaseKey = process.env.SUPABASE_KEY;
 
-// Timer trigger: runs every hour at minute 5
+// ═══════════════════════════════════════════════════════════════
+// Timer trigger: runs every hour at :05
+// Checks Supabase for schedules matching the current UTC day/time,
+// then uses each schedule's own stored credentials to authenticate
+// and update apps via the Power Platform API — the exact same API
+// the "Update All Apps" button uses in the browser.
+// ═══════════════════════════════════════════════════════════════
 app.timer('ScheduledUpdateTrigger', {
-    schedule: '0 5 * * * *', // Every hour at :05
+    schedule: '0 5 * * * *',
     handler: async (myTimer, context) => {
         context.log('⏰ Scheduled update check starting...');
-        
+
+        if (!supabaseUrl || !supabaseKey) {
+            context.error('❌ SUPABASE_URL and SUPABASE_KEY env vars are required');
+            return;
+        }
+
         const now = new Date();
-        const currentDayOfWeek = now.getUTCDay(); // 0 = Sunday
+        const currentDayOfWeek = now.getUTCDay();
         const currentHour = now.getUTCHours();
         const currentTimeUtc = `${currentHour.toString().padStart(2, '0')}:00`;
-        
         const days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
         context.log(`Current UTC: ${days[currentDayOfWeek]} ${currentTimeUtc} (${now.toISOString()})`);
-        
+
         try {
-            // Get schedules that match current day/time
             const schedules = await getMatchingSchedules(currentDayOfWeek, currentTimeUtc, context);
-            
             if (schedules.length === 0) {
-                context.log(`No schedules match current time (Day: ${currentDayOfWeek}, Time: ${currentTimeUtc}). Done.`);
+                context.log('No schedules match current UTC slot. Done.');
                 return;
             }
-            
             context.log(`Found ${schedules.length} schedule(s) to process`);
-            
+
             for (const schedule of schedules) {
-                context.log(`Processing schedule ID ${schedule.id} for ${schedule.user_email} (${schedule.timezone || 'UTC'})`);
+                context.log(`── Processing schedule #${schedule.id} for ${schedule.user_email} ──`);
                 await processSchedule(schedule, context);
             }
-            
             context.log('✅ Scheduled update check completed');
         } catch (error) {
-            context.error('❌ Scheduled update check failed:', error);
+            context.error('❌ Scheduled update check failed:', error.message);
         }
     }
 });
 
+// ── Supabase helpers ──────────────────────────────────────────
+
 async function getMatchingSchedules(dayOfWeek, timeUtc, context) {
-    const url = `${config.supabaseUrl}/rest/v1/update_schedules?enabled=eq.true&day_of_week=eq.${dayOfWeek}&time_utc=eq.${timeUtc}&select=*`;
-    
-    context.log(`Querying schedules: ${url}`);
-    
-    const response = await fetch(url, {
-        headers: {
-            'apikey': config.supabaseKey,
-            'Authorization': `Bearer ${config.supabaseKey}`
-        }
-    });
-    
-    if (!response.ok) {
-        const errorText = await response.text();
-        context.error(`Failed to fetch schedules: ${response.status} - ${errorText}`);
-        throw new Error(`Failed to fetch schedules: ${response.status}`);
-    }
-    
-    const schedules = await response.json();
-    context.log(`Query returned ${schedules.length} schedule(s)`);
-    
-    return schedules;
+    // Fetch enabled schedules whose UTC day + time match now
+    const url = `${supabaseUrl}/rest/v1/update_schedules?enabled=eq.true&day_of_week=eq.${dayOfWeek}&time_utc=eq.${timeUtc}&select=*`;
+    const resp = await fetch(url, { headers: sbHeaders() });
+    if (!resp.ok) throw new Error(`Supabase schedules query failed: ${resp.status}`);
+    return resp.json();
 }
 
-async function processSchedule(schedule, context) {
-    context.log(`Processing schedule for ${schedule.user_email} in environment ${schedule.environment_id}`);
-    
-    const startTime = new Date();
-    let status = 'success';
-    let result = { appsUpdated: 0, appsFailed: 0, apps: [] };
-    
-    try {
-        // Get Power Platform API token
-        const ppToken = await getPowerPlatformToken(context);
-        
-        // Get apps with available updates (using Power Platform API - same as main app)
-        const apps = await getAppsWithUpdates(schedule.environment_id, ppToken, context);
-        
-        context.log(`Found ${apps.length} app(s) with updates available`);
-        
-        if (apps.length === 0) {
-            context.log('✅ All apps are up to date!');
-            status = 'success';
-            result.message = 'All apps are up to date';
-        } else {
-            // Update each app
-            for (const app of apps) {
-                const appName = app.localizedName || app.applicationName || app.uniqueName || 'Unknown';
-                try {
-                    await updateApp(schedule.environment_id, app, ppToken, context);
-                    result.appsUpdated++;
-                    result.apps.push({ name: appName, status: 'success', version: app.latestVersion });
-                    context.log(`  ✅ ${appName} - update submitted`);
-                } catch (appError) {
-                    result.appsFailed++;
-                    result.apps.push({ name: appName, status: 'failed', error: appError.message });
-                    context.warn(`  ❌ ${appName} - failed: ${appError.message}`);
-                }
-            }
-        }
-        
-    } catch (error) {
-        status = 'failed';
-        result.error = error.message;
-        context.error(`Schedule processing failed: ${error.message}`);
+async function getScheduleSecret(scheduleId, context) {
+    // Read the client_secret stored in the secure table
+    const url = `${supabaseUrl}/rest/v1/schedule_secrets?schedule_id=eq.${scheduleId}&select=client_secret`;
+    const resp = await fetch(url, { headers: sbHeaders() });
+    if (!resp.ok) {
+        context.warn(`Could not read schedule_secrets (${resp.status}), trying update_schedules.client_secret`);
+        return null;
     }
-    
-    // Update schedule with results
-    await updateScheduleResult(schedule.id, status, result, context);
-    
-    context.log(`Schedule completed: ${result.appsUpdated} updated, ${result.appsFailed} failed`);
+    const rows = await resp.json();
+    return rows.length > 0 ? rows[0].client_secret : null;
 }
 
-// NOTE: This function is kept for potential future use if Dataverse API access is needed
-// Currently, we use only the Power Platform API for app detection and updates
-async function getAccessToken(orgUrl, context) {
-    // Use client credentials flow with service principal
-    const credential = new ClientSecretCredential(
-        config.tenantId,
-        config.clientId,
-        config.clientSecret
-    );
-    
-    // Get token for the Dynamics CRM API
-    // The scope should be the org URL + /.default for client credentials
-    const scope = `${orgUrl}/.default`;
-    
-    const token = await credential.getToken(scope);
-    return token.token;
-}
-
-async function getPowerPlatformToken(context) {
-    // Get token for Power Platform API
-    const credential = new ClientSecretCredential(
-        config.tenantId,
-        config.clientId,
-        config.clientSecret
-    );
-    
-    // Power Platform API scope
-    const token = await credential.getToken('https://api.powerplatform.com/.default');
-    return token.token;
-}
-
-async function getAppsWithUpdates(environmentId, ppToken, context) {
-    // Use the same Power Platform API that the main app uses
-    const baseUrl = `https://api.powerplatform.com/appmanagement/environments/${environmentId}/applicationPackages`;
-    const apiVersion = 'api-version=2022-03-01-preview';
-    
-    context.log('Fetching installed apps from Power Platform API...');
-    const installedApps = await fetchAllPages(`${baseUrl}?appInstallState=Installed&${apiVersion}`, ppToken, context);
-    context.log(`Found ${installedApps.length} installed apps`);
-    
-    context.log('Fetching catalog packages...');
-    const allCatalog = await fetchAllPages(`${baseUrl}?${apiVersion}`, ppToken, context);
-    context.log(`Found ${allCatalog.length} catalog packages`);
-    
-    // Build version map from catalog by applicationId
-    const catalogMapById = new Map();
-    for (const app of allCatalog) {
-        if (!app.applicationId) continue;
-        const existing = catalogMapById.get(app.applicationId);
-        if (!existing || compareVersions(app.version, existing.version) > 0) {
-            catalogMapById.set(app.applicationId, app);
-        }
-    }
-    
-    // Detect apps with updates (same logic as main app)
-    const appsWithUpdates = [];
-    for (const app of installedApps) {
-        // Skip apps that require Admin Center (SPA)
-        if (app.singlePageApplicationUrl) {
-            context.log(`  Skipping ${app.localizedName || app.uniqueName} - requires Admin Center`);
-            continue;
-        }
-        
-        let hasUpdate = false;
-        let latestVersion = null;
-        let catalogUniqueName = null;
-        
-        // Check 1: Direct API fields
-        if (app.updateAvailable || app.catalogVersion || app.availableVersion) {
-            const directVersion = app.catalogVersion || app.availableVersion;
-            if (directVersion && compareVersions(directVersion, app.version) > 0) {
-                hasUpdate = true;
-                latestVersion = directVersion;
-            } else if (app.updateAvailable === true) {
-                hasUpdate = true;
-            }
-        }
-        
-        // Check 2: Compare with catalog by applicationId
-        if (!hasUpdate && app.applicationId) {
-            const catalogEntry = catalogMapById.get(app.applicationId);
-            if (catalogEntry && compareVersions(catalogEntry.version, app.version) > 0) {
-                hasUpdate = true;
-                latestVersion = catalogEntry.version;
-                catalogUniqueName = catalogEntry.uniqueName;
-            }
-        }
-        
-        if (hasUpdate) {
-            context.log(`  ✓ Update available: ${app.localizedName || app.uniqueName} ${app.version} → ${latestVersion || 'newer'}`);
-            appsWithUpdates.push({
-                ...app,
-                catalogUniqueName: catalogUniqueName || app.uniqueName,
-                latestVersion: latestVersion
-            });
-        }
-    }
-    
-    return appsWithUpdates;
-}
-
-async function fetchAllPages(url, token, context) {
-    // Fetch paginated results from Power Platform API
-    let allItems = [];
-    let nextLink = url;
-    let pageNum = 1;
-    
-    while (nextLink) {
-        const response = await fetch(nextLink, {
-            headers: {
-                'Authorization': `Bearer ${token}`,
-                'Accept': 'application/json'
-            }
-        });
-        
-        if (!response.ok) {
-            const errorText = await response.text();
-            throw new Error(`API error on page ${pageNum}: ${response.status} - ${errorText}`);
-        }
-        
-        const data = await response.json();
-        const items = data.value || [];
-        allItems = allItems.concat(items);
-        
-        nextLink = data.nextLink || null;
-        pageNum++;
-        
-        // Safety limit
-        if (pageNum > 20) {
-            context.warn('Reached page limit of 20, stopping pagination');
-            break;
-        }
-    }
-    
-    return allItems;
-}
-
-function compareVersions(v1, v2) {
-    // Compare two version strings (e.g., "1.2.3" vs "1.2.4")
-    if (!v1 || !v2) return 0;
-    
-    const parts1 = v1.split('.').map(p => parseInt(p, 10) || 0);
-    const parts2 = v2.split('.').map(p => parseInt(p, 10) || 0);
-    const maxLen = Math.max(parts1.length, parts2.length);
-    
-    for (let i = 0; i < maxLen; i++) {
-        const p1 = parts1[i] || 0;
-        const p2 = parts2[i] || 0;
-        if (p1 > p2) return 1;
-        if (p1 < p2) return -1;
-    }
-    
-    return 0;
-}
-
-async function updateApp(environmentId, app, ppToken, context) {
-    // Use the Power Platform API to install/update the app (same as main app)
-    const installUniqueName = app.catalogUniqueName || app.uniqueName;
-    
-    if (!installUniqueName) {
-        const appName = app.localizedName || app.applicationName || 'Unknown';
-        context.warn(`No unique name found for app: ${appName}`);
-        throw new Error('App missing unique name');
-    }
-    
-    const url = `https://api.powerplatform.com/appmanagement/environments/${environmentId}/applicationPackages/${installUniqueName}/install?api-version=2022-03-01-preview`;
-    
-    const appName = app.localizedName || app.applicationName || app.uniqueName;
-    context.log(`Installing/updating: ${appName} (${installUniqueName})`);
-    
-    const response = await fetch(url, {
-        method: 'POST',
-        headers: {
-            'Authorization': `Bearer ${ppToken}`,
-            'Content-Type': 'application/json'
-        }
-    });
-    
-    if (!response.ok) {
-        const errorText = await response.text();
-        context.error(`Failed to update ${appName}: ${response.status} - ${errorText}`);
-        throw new Error(`Update failed: ${response.status} - ${errorText}`);
-    }
-    
-    context.log(`✅ Successfully submitted update for ${appName}`);
-    
-    // Small delay to avoid rate limiting
-    await new Promise(resolve => setTimeout(resolve, 1500));
+async function getSecretFallback(scheduleId, context) {
+    // Fallback: read client_secret directly from update_schedules row
+    const url = `${supabaseUrl}/rest/v1/update_schedules?id=eq.${scheduleId}&select=client_secret`;
+    const resp = await fetch(url, { headers: sbHeaders() });
+    if (!resp.ok) return null;
+    const rows = await resp.json();
+    return rows.length > 0 ? rows[0].client_secret : null;
 }
 
 async function updateScheduleResult(scheduleId, status, result, context) {
-    const url = `${config.supabaseUrl}/rest/v1/update_schedules?id=eq.${scheduleId}`;
-    
-    const response = await fetch(url, {
+    const url = `${supabaseUrl}/rest/v1/update_schedules?id=eq.${scheduleId}`;
+    const resp = await fetch(url, {
         method: 'PATCH',
-        headers: {
-            'apikey': config.supabaseKey,
-            'Authorization': `Bearer ${config.supabaseKey}`,
-            'Content-Type': 'application/json'
-        },
+        headers: { ...sbHeaders(), 'Content-Type': 'application/json' },
         body: JSON.stringify({
             last_run_at: new Date().toISOString(),
             last_run_status: status,
             last_run_result: result
         })
     });
-    
-    if (!response.ok) {
-        context.warn(`Failed to update schedule result: ${response.status}`);
+    if (!resp.ok) context.warn(`Failed to save run result: ${resp.status}`);
+}
+
+function sbHeaders() {
+    return { 'apikey': supabaseKey, 'Authorization': `Bearer ${supabaseKey}` };
+}
+
+// ── Core processing ───────────────────────────────────────────
+
+async function processSchedule(schedule, context) {
+    let status = 'success';
+    let result = { appsUpdated: 0, appsFailed: 0, apps: [] };
+
+    try {
+        // 1. Resolve credentials from the schedule record
+        const tenantId = schedule.tenant_id;
+        const clientId = schedule.client_id;
+        if (!tenantId || !clientId) throw new Error('Schedule is missing tenant_id or client_id');
+
+        let clientSecret = await getScheduleSecret(schedule.id, context);
+        if (!clientSecret) clientSecret = await getSecretFallback(schedule.id, context);
+        if (!clientSecret) throw new Error('No client_secret found for this schedule (check schedule_secrets table or update_schedules.client_secret)');
+
+        context.log(`Credentials: tenant=${tenantId}, clientId=${clientId}, env=${schedule.environment_id}`);
+
+        // 2. Get Power Platform token using THIS schedule's credentials
+        const ppToken = await getPowerPlatformToken(tenantId, clientId, clientSecret, context);
+
+        // 3. Discover apps with updates (same API the browser uses)
+        const appsToUpdate = await getAppsWithUpdates(schedule.environment_id, ppToken, context);
+        context.log(`Found ${appsToUpdate.length} app(s) with updates`);
+
+        if (appsToUpdate.length === 0) {
+            context.log('✅ All apps are already up to date');
+            result.message = 'All apps are up to date';
+        } else {
+            // 4. Update each app (same POST the browser uses)
+            for (const a of appsToUpdate) {
+                const name = a.localizedName || a.applicationName || a.uniqueName || 'Unknown';
+                try {
+                    await updateApp(schedule.environment_id, a, ppToken, context);
+                    result.appsUpdated++;
+                    result.apps.push({ name, status: 'success', version: a.latestVersion });
+                } catch (err) {
+                    result.appsFailed++;
+                    result.apps.push({ name, status: 'failed', error: err.message });
+                    context.warn(`  ❌ ${name}: ${err.message}`);
+                }
+            }
+        }
+    } catch (error) {
+        status = 'failed';
+        result.error = error.message;
+        context.error(`Schedule failed: ${error.message}`);
     }
+
+    await updateScheduleResult(schedule.id, status, result, context);
+    context.log(`Result: ${result.appsUpdated} updated, ${result.appsFailed} failed`);
+}
+
+// ── Auth ──────────────────────────────────────────────────────
+
+async function getPowerPlatformToken(tenantId, clientId, clientSecret, context) {
+    const credential = new ClientSecretCredential(tenantId, clientId, clientSecret);
+    const token = await credential.getToken('https://api.powerplatform.com/.default');
+    context.log('Power Platform token acquired');
+    return token.token;
+}
+
+// ── App discovery (identical to the browser's loadApplications) ──
+
+async function getAppsWithUpdates(environmentId, ppToken, context) {
+    const baseUrl = `https://api.powerplatform.com/appmanagement/environments/${environmentId}/applicationPackages`;
+    const qs = 'api-version=2022-03-01-preview';
+
+    // Step 1 — installed apps
+    context.log('Fetching installed apps…');
+    const installed = await fetchAllPages(`${baseUrl}?appInstallState=Installed&${qs}`, ppToken, context);
+    context.log(`  ${installed.length} installed apps`);
+
+    // Step 2 — full catalog (contains newer versions)
+    context.log('Fetching catalog…');
+    const catalog = await fetchAllPages(`${baseUrl}?${qs}`, ppToken, context);
+    context.log(`  ${catalog.length} catalog entries`);
+
+    // Build highest-version map keyed by applicationId
+    const catalogById = new Map();
+    for (const c of catalog) {
+        if (!c.applicationId) continue;
+        const prev = catalogById.get(c.applicationId);
+        if (!prev || cmpVer(c.version, prev.version) > 0) catalogById.set(c.applicationId, c);
+    }
+
+    // Build highest-version map keyed by uniqueName base
+    const catalogByName = new Map();
+    for (const c of catalog) {
+        if (!c.uniqueName) continue;
+        const base = c.uniqueName.replace(/_upgrade$/i, '').replace(/_\d+$/, '');
+        const prev = catalogByName.get(base);
+        if (!prev || cmpVer(c.version, prev.version) > 0) catalogByName.set(base, c);
+    }
+
+    // Build highest-version map keyed by display name
+    const catalogByDisplay = new Map();
+    for (const c of catalog) {
+        const n = (c.localizedName || c.applicationName || '').toLowerCase();
+        if (!n) continue;
+        const prev = catalogByDisplay.get(n);
+        if (!prev || cmpVer(c.version, prev.version) > 0) catalogByDisplay.set(n, c);
+    }
+
+    // Detect updates — same multi-check logic as app.js
+    const out = [];
+    for (const a of installed) {
+        if (a.singlePageApplicationUrl) continue; // SPA = Admin Center only
+
+        let hit = false, latest = null, catName = null;
+
+        // Check state field
+        const st = (a.state || '').toLowerCase();
+        if (st.includes('update') || st === 'installedwithupdateavailable') hit = true;
+
+        // Check direct version fields
+        if (!hit) {
+            const dv = a.catalogVersion || a.availableVersion || a.latestVersion || a.newVersion;
+            if (dv && cmpVer(dv, a.version) > 0) { hit = true; latest = dv; }
+            if (!hit && a.updateAvailable === true) hit = true;
+        }
+
+        // Check catalog by applicationId
+        if (!hit && a.applicationId) {
+            const ce = catalogById.get(a.applicationId);
+            if (ce && cmpVer(ce.version, a.version) > 0) { hit = true; latest = ce.version; catName = ce.uniqueName; }
+        }
+
+        // Check catalog by uniqueName base
+        if (!hit && a.uniqueName) {
+            const base = a.uniqueName.replace(/_upgrade$/i, '').replace(/_\d+$/, '');
+            const ce = catalogByName.get(base);
+            if (ce && cmpVer(ce.version, a.version) > 0) { hit = true; latest = ce.version; catName = ce.uniqueName; }
+        }
+
+        // Check catalog by display name
+        if (!hit) {
+            const n = (a.localizedName || a.applicationName || '').toLowerCase();
+            if (n) {
+                const ce = catalogByDisplay.get(n);
+                if (ce && cmpVer(ce.version, a.version) > 0) { hit = true; latest = ce.version; catName = ce.uniqueName; }
+            }
+        }
+
+        if (hit) {
+            const name = a.localizedName || a.applicationName || a.uniqueName;
+            context.log(`  ✓ ${name}  ${a.version} → ${latest || 'newer'}`);
+            out.push({ ...a, catalogUniqueName: catName || a.uniqueName, latestVersion: latest });
+        }
+    }
+    return out;
+}
+
+// ── App update (identical POST to the browser's reinstallAllApps) ──
+
+async function updateApp(environmentId, a, ppToken, context) {
+    const pkg = a.catalogUniqueName || a.uniqueName;
+    if (!pkg) throw new Error('No package uniqueName');
+    const name = a.localizedName || a.applicationName || a.uniqueName;
+
+    const url = `https://api.powerplatform.com/appmanagement/environments/${environmentId}/applicationPackages/${pkg}/install?api-version=2022-03-01-preview`;
+    context.log(`  POST ${pkg}`);
+
+    const resp = await fetch(url, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${ppToken}`, 'Content-Type': 'application/json' }
+    });
+
+    if (!resp.ok) {
+        const body = await resp.text();
+        throw new Error(`${resp.status} ${body.substring(0, 200)}`);
+    }
+
+    context.log(`  ✅ ${name} — update submitted`);
+    await new Promise(r => setTimeout(r, 1500)); // rate-limit guard
+}
+
+// ── Utilities ─────────────────────────────────────────────────
+
+async function fetchAllPages(url, token, context) {
+    let items = [], next = url, page = 1;
+    while (next) {
+        const r = await fetch(next, { headers: { 'Authorization': `Bearer ${token}`, 'Accept': 'application/json' } });
+        if (!r.ok) { const t = await r.text(); throw new Error(`Page ${page}: ${r.status} ${t.substring(0, 200)}`); }
+        const d = await r.json();
+        items = items.concat(d.value || []);
+        next = d.nextLink || null;
+        if (++page > 20) break;
+    }
+    return items;
+}
+
+function cmpVer(a, b) {
+    if (!a || !b) return 0;
+    const pa = a.split('.').map(n => parseInt(n, 10) || 0);
+    const pb = b.split('.').map(n => parseInt(n, 10) || 0);
+    for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+        if ((pa[i] || 0) > (pb[i] || 0)) return 1;
+        if ((pa[i] || 0) < (pb[i] || 0)) return -1;
+    }
+    return 0;
 }

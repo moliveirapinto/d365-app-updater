@@ -2,6 +2,8 @@
     "IsEncrypted": false,
     "Values": {
         "AzureWebJobsStorage": "",
-        "FUNCTIONS_WORKER_RUNTIME": "node"
+        "FUNCTIONS_WORKER_RUNTIME": "node",
+        "SUPABASE_URL": "https://fpekzltxukikaixebeeu.supabase.co",
+        "SUPABASE_KEY": "<paste-your-supabase-service-role-key-here>"
     }
 }

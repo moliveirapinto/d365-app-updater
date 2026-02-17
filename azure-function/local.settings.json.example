@@ -1,12 +1,10 @@
 {
+{
     "IsEncrypted": false,
     "Values": {
         "AzureWebJobsStorage": "UseDevelopmentStorage=true",
         "FUNCTIONS_WORKER_RUNTIME": "node",
-        "AZURE_TENANT_ID": "<your-tenant-id>",
-        "AZURE_CLIENT_ID": "<your-service-principal-client-id>",
-        "AZURE_CLIENT_SECRET": "<your-service-principal-client-secret>",
         "SUPABASE_URL": "https://your-project.supabase.co",
-        "SUPABASE_KEY": "<your-service-role-key>"
+        "SUPABASE_KEY": "<your-supabase-service-role-key>"
     }
 }
