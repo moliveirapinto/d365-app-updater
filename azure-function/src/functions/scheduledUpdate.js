@@ -21,20 +21,22 @@ app.timer('ScheduledUpdateTrigger', {
         const currentHour = now.getUTCHours();
         const currentTimeUtc = `${currentHour.toString().padStart(2, '0')}:00`;
         
-        context.log(`Current UTC: Day ${currentDayOfWeek}, Time ${currentTimeUtc}`);
+        const days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+        context.log(`Current UTC: ${days[currentDayOfWeek]} ${currentTimeUtc} (${now.toISOString()})`);
         
         try {
             // Get schedules that match current day/time
             const schedules = await getMatchingSchedules(currentDayOfWeek, currentTimeUtc, context);
             
             if (schedules.length === 0) {
-                context.log('No schedules match current time. Done.');
+                context.log(`No schedules match current time (Day: ${currentDayOfWeek}, Time: ${currentTimeUtc}). Done.`);
                 return;
             }
             
             context.log(`Found ${schedules.length} schedule(s) to process`);
             
             for (const schedule of schedules) {
+                context.log(`Processing schedule ID ${schedule.id} for ${schedule.user_email} (${schedule.timezone || 'UTC'})`);
                 await processSchedule(schedule, context);
             }
             
@@ -48,6 +50,8 @@ app.timer('ScheduledUpdateTrigger', {
 async function getMatchingSchedules(dayOfWeek, timeUtc, context) {
     const url = `${config.supabaseUrl}/rest/v1/update_schedules?enabled=eq.true&day_of_week=eq.${dayOfWeek}&time_utc=eq.${timeUtc}&select=*`;
     
+    context.log(`Querying schedules: ${url}`);
+    
     const response = await fetch(url, {
         headers: {
             'apikey': config.supabaseKey,
@@ -56,10 +60,15 @@ async function getMatchingSchedules(dayOfWeek, timeUtc, context) {
     });
     
     if (!response.ok) {
+        const errorText = await response.text();
+        context.error(`Failed to fetch schedules: ${response.status} - ${errorText}`);
         throw new Error(`Failed to fetch schedules: ${response.status}`);
     }
     
-    return response.json();
+    const schedules = await response.json();
+    context.log(`Query returned ${schedules.length} schedule(s)`);
+    
+    return schedules;
 }
 
 async function processSchedule(schedule, context) {
@@ -70,18 +79,23 @@ async function processSchedule(schedule, context) {
     let result = { appsUpdated: 0, appsFailed: 0, apps: [] };
     
     try {
-        // Get access token for the environment
-        const accessToken = await getAccessToken(schedule.org_url, context);
+        // Get access tokens - one for Dataverse queries, one for Power Platform API
+        const dataverseToken = await getAccessToken(schedule.org_url, context);
+        const ppToken = await getPowerPlatformToken(context);
         
         // Get apps with available updates
-        const apps = await getAppsWithUpdates(schedule.org_url, schedule.environment_id, accessToken, context);
+        const apps = await getAppsWithUpdates(schedule.org_url, schedule.environment_id, dataverseToken, context);
         
         context.log(`Found ${apps.length} app(s) with updates available`);
+        
+        if (apps.length === 0) {
+            context.log('No apps need updating. Skipping update phase.');
+        }
         
         // Update each app
         for (const app of apps) {
             try {
-                await updateApp(schedule.org_url, schedule.environment_id, app, accessToken, context);
+                await updateApp(schedule.org_url, schedule.environment_id, app, ppToken, context);
                 result.appsUpdated++;
                 result.apps.push({ name: app.msdyn_name, status: 'success' });
             } catch (appError) {
@@ -119,6 +133,19 @@ async function getAccessToken(orgUrl, context) {
     return token.token;
 }
 
+async function getPowerPlatformToken(context) {
+    // Get token for Power Platform API
+    const credential = new ClientSecretCredential(
+        config.tenantId,
+        config.clientId,
+        config.clientSecret
+    );
+    
+    // Power Platform API scope
+    const token = await credential.getToken('https://api.powerplatform.com/.default');
+    return token.token;
+}
+
 async function getAppsWithUpdates(orgUrl, environmentId, accessToken, context) {
     // Query the organization for apps with updates
     const url = `${orgUrl}/api/data/v9.2/msdyn_solutioncomponentcountssummaries?$filter=msdyn_componenttype eq 300 and msdyn_upgradeavailable eq true`;
@@ -133,31 +160,47 @@ async function getAppsWithUpdates(orgUrl, environmentId, accessToken, context) {
     });
     
     if (!response.ok) {
+        const errorText = await response.text();
+        context.error(`Failed to get apps: ${response.status} - ${errorText}`);
         throw new Error(`Failed to get apps: ${response.status} ${response.statusText}`);
     }
     
     const data = await response.json();
+    context.log(`Found ${data.value?.length || 0} apps with msdyn_upgradeavailable=true`);
     return data.value || [];
 }
 
-async function updateApp(orgUrl, environmentId, app, accessToken, context) {
-    // Use the AppModuleComponentSource API to trigger update
-    // This is a simplified example - actual implementation may need adjustment
-    // based on your Power Platform API configuration
+async function updateApp(orgUrl, environmentId, app, ppToken, context) {
+    // Use the Power Platform API to install/update the app
+    const installUniqueName = app.msdyn_uniquename || app.uniqueName;
     
-    context.log(`Updating app: ${app.msdyn_name}`);
+    if (!installUniqueName) {
+        context.warn(`No unique name found for app: ${app.msdyn_name || 'Unknown'}`);
+        throw new Error('App missing unique name');
+    }
     
-    // The actual update mechanism depends on how your app integrates with Power Platform
-    // This could be:
-    // 1. Installing/updating a solution
-    // 2. Calling the App Module update API
-    // 3. Using the Power Platform Admin API
+    const url = `https://api.powerplatform.com/appmanagement/environments/${environmentId}/applicationPackages/${installUniqueName}/install?api-version=2022-03-01-preview`;
     
-    // For now, log that we would update
-    context.log(`Would update app ${app.msdyn_name} (${app.msdyn_componentid})`);
+    context.log(`Installing/updating app: ${app.msdyn_name} (${installUniqueName})`);
     
-    // Simulated delay
-    await new Promise(resolve => setTimeout(resolve, 1000));
+    const response = await fetch(url, {
+        method: 'POST',
+        headers: {
+            'Authorization': `Bearer ${ppToken}`,
+            'Content-Type': 'application/json'
+        }
+    });
+    
+    if (!response.ok) {
+        const errorText = await response.text();
+        context.error(`Failed to update ${app.msdyn_name}: ${response.status} - ${errorText}`);
+        throw new Error(`Update failed: ${response.status} - ${errorText}`);
+    }
+    
+    context.log(`✅ Successfully submitted update for ${app.msdyn_name}`);
+    
+    // Small delay to avoid rate limiting
+    await new Promise(resolve => setTimeout(resolve, 1500));
 }
 
 async function updateScheduleResult(scheduleId, status, result, context) {

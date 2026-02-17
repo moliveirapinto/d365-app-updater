@@ -2201,8 +2201,9 @@ async function loadSchedule() {
             if (schedules.length > 0) {
                 const schedule = schedules[0];
                 document.getElementById('scheduleEnabled').checked = schedule.enabled;
-                document.getElementById('scheduleDay').value = schedule.day_of_week;
-                document.getElementById('scheduleTime').value = schedule.time_utc;
+                // Use display values if available (user's original selection), otherwise fall back to UTC values
+                document.getElementById('scheduleDay').value = schedule.display_day !== undefined ? schedule.display_day : schedule.day_of_week;
+                document.getElementById('scheduleTime').value = schedule.display_time || schedule.time_utc;
                 document.getElementById('scheduleTimezone').value = schedule.timezone || 'UTC';
                 // Secret is stored securely - just indicate it's set
                 const secretInput = document.getElementById('scheduleClientSecret');
@@ -2242,12 +2243,24 @@ function updateScheduleStatus(schedule) {
     }
     
     const days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
-    const dayName = days[schedule.day_of_week];
-    const timeDisplay = formatTimeDisplay(schedule.time_utc);
+    
+    // Show the user's display values (what they selected)
+    const displayDay = schedule.display_day !== undefined ? schedule.display_day : schedule.day_of_week;
+    const displayTime = schedule.display_time || schedule.time_utc;
+    const dayName = days[displayDay];
+    const timeDisplay = formatTimeDisplay(displayTime);
+    
+    // Also show UTC for clarity
+    const utcDayName = days[schedule.day_of_week];
+    const utcTimeDisplay = formatTimeDisplay(schedule.time_utc);
     const lastRun = schedule.last_run_at ? new Date(schedule.last_run_at).toLocaleString() : 'Never';
     
-    statusEl.innerHTML = `<i class="fas fa-check-circle"></i> Scheduled: Every <strong>${dayName}</strong> at <strong>${timeDisplay}</strong> (${schedule.timezone || 'UTC'})<br>
-        <small>Last run: ${lastRun}</small>`;
+    // If UTC is different from display, show both
+    const showUtcInfo = (schedule.day_of_week !== displayDay || schedule.time_utc !== displayTime);
+    
+    statusEl.innerHTML = `<i class="fas fa-check-circle"></i> Scheduled: Every <strong>${dayName}</strong> at <strong>${timeDisplay}</strong> (${schedule.timezone || 'UTC'})` +
+        (showUtcInfo ? `<br><small style="color: #6b7280;">Runs at: ${utcDayName} ${utcTimeDisplay} UTC</small>` : '') +
+        `<br><small>Last run: ${lastRun}</small>`;
     statusEl.className = 'schedule-status active';
 }
 
@@ -2257,6 +2270,90 @@ function formatTimeDisplay(time24) {
     const ampm = h >= 12 ? 'PM' : 'AM';
     const h12 = h % 12 || 12;
     return `${h12}:${minutes} ${ampm}`;
+}
+
+/**
+ * Convert a local time in a specific timezone to UTC day and time
+ * @param {number} dayOfWeek - Day of week (0=Sunday, 6=Saturday) in local timezone
+ * @param {string} time - Time in HH:MM format in local timezone
+ * @param {string} timezone - IANA timezone (e.g., 'America/New_York')
+ * @returns {object} { day_of_week_utc, time_utc } - Converted to UTC
+ */
+function convertToUTC(dayOfWeek, time, timezone) {
+    // Parse the time
+    const [hours, minutes] = time.split(':').map(Number);
+    
+    // Use a reference date - find next occurrence of the target day
+    // Start with a known date and adjust to the target day of week
+    const now = new Date();
+    const currentDay = now.getDay();
+    let daysUntilTarget = (dayOfWeek - currentDay + 7) % 7;
+    if (daysUntilTarget === 0) daysUntilTarget = 7; // Next week if today
+    
+    const targetDate = new Date(now);
+    targetDate.setDate(now.getDate() + daysUntilTarget);
+    targetDate.setHours(0, 0, 0, 0);
+    
+    // Format this date in the target timezone to get the year-month-day
+    const formatter = new Intl.DateTimeFormat('en-CA', { // en-CA gives YYYY-MM-DD format
+        timeZone: timezone,
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit'
+    });
+    const localDate = formatter.format(targetDate);
+    
+    // Create the full datetime string: YYYY-MM-DDTHH:MM in the target timezone
+    const dateTimeString = `${localDate}T${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:00`;
+    
+    // Parse this as if it's in the target timezone by using the locale-specific parsing
+    // We'll create a date and check what UTC time corresponds to this local time
+    
+    // Use this approach: create UTC dates and check which one shows the right time in the target timezone
+    // Binary search would be most efficient, but let's use a simpler approach for clarity
+    
+    // Get the approximate UTC time by trying different offsets
+    for (let offsetHours = -12; offsetHours <= 14; offsetHours++) {
+        const testDate = new Date(`${localDate}T${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:00Z`);
+        testDate.setUTCHours(testDate.getUTCHours() - offsetHours);
+        
+        // Check what this UTC time shows in the target timezone
+        const checkFormatter = new Intl.DateTimeFormat('en-CA', {
+            timeZone: timezone,
+            year: 'numeric',
+            month: '2-digit',
+            day: '2-digit',
+            hour: '2-digit',
+            minute: '2-digit',
+            hour12: false
+        });
+        
+        const parts = checkFormatter.formatToParts(testDate);
+        const partsMap = {};
+        parts.forEach(p => { if (p.type !== 'literal') partsMap[p.type] = p.value; });
+        
+        const checkDate = `${partsMap.year}-${partsMap.month}-${partsMap.day}`;
+        const checkHour = parseInt(partsMap.hour, 10);
+        const checkMinute = parseInt(partsMap.minute, 10);
+        
+        if (checkDate === localDate && checkHour === hours && checkMinute === minutes) {
+            // Found the matching UTC time!
+            const utcDay = testDate.getUTCDay();
+            const utcHour = testDate.getUTCHours();
+            const utcMinute = testDate.getUTCMinutes();
+            
+            return {
+                day_of_week_utc: utcDay,
+                time_utc: `${utcHour.toString().padStart(2, '0')}:${utcMinute.toString().padStart(2, '0')}`
+            };
+        }
+    }
+    
+    // Fallback: no conversion (shouldn't happen with valid timezones)
+    return {
+        day_of_week_utc: dayOfWeek,
+        time_utc: time
+    };
 }
 
 async function saveSchedule() {
@@ -2280,14 +2377,24 @@ async function saveSchedule() {
     saveBtn.disabled = true;
     saveBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Saving...';
     
+    // Get user's selected values (in their local timezone)
+    const selectedDay = parseInt(document.getElementById('scheduleDay').value, 10);
+    const selectedTime = document.getElementById('scheduleTime').value;
+    const selectedTimezone = document.getElementById('scheduleTimezone').value;
+    
+    // Convert to UTC
+    const utcSchedule = convertToUTC(selectedDay, selectedTime, selectedTimezone);
+    
     const schedule = {
         user_email: userEmail,
         environment_id: envId,
         org_url: orgUrl,
         enabled: document.getElementById('scheduleEnabled').checked,
-        day_of_week: parseInt(document.getElementById('scheduleDay').value, 10),
-        time_utc: document.getElementById('scheduleTime').value,
-        timezone: document.getElementById('scheduleTimezone').value,
+        day_of_week: utcSchedule.day_of_week_utc,  // CONVERTED to UTC
+        time_utc: utcSchedule.time_utc,             // CONVERTED to UTC
+        timezone: selectedTimezone,                 // Store original timezone for display
+        display_day: selectedDay,                   // Store original selection for UI
+        display_time: selectedTime,                 // Store original selection for UI
         client_id: getCurrentClientId(),
         tenant_id: getCurrentTenantId(),
         updated_at: new Date().toISOString()
@@ -2431,6 +2538,21 @@ async function saveSchedule() {
             const saved = await resp.json();
             updateScheduleStatus(Array.isArray(saved) ? saved[0] : saved);
             
+            // Build conversion info message
+            const days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+            const selectedDayName = days[selectedDay];
+            const selectedTimeDisplay = formatTimeDisplay(selectedTime);
+            const utcDayName = days[utcSchedule.day_of_week_utc];
+            const utcTimeDisplay = formatTimeDisplay(utcSchedule.time_utc);
+            
+            const isDifferent = (selectedDay !== utcSchedule.day_of_week_utc || selectedTime !== utcSchedule.time_utc);
+            const conversionInfo = isDifferent 
+                ? `<div style="background: #eff6ff; padding: 12px; border-radius: 6px; margin: 10px 0; border-left: 3px solid #3b82f6;">
+                    <strong>📅 Your Schedule:</strong> ${selectedDayName} at ${selectedTimeDisplay} (${selectedTimezone})<br>
+                    <strong>⏰ Runs at:</strong> ${utcDayName} at ${utcTimeDisplay} UTC
+                   </div>`
+                : `<p>Scheduled for: <strong>${selectedDayName} at ${selectedTimeDisplay} UTC</strong></p>`;
+            
             // If scheduling is enabled AND a new secret was provided, set up the app registration
             if (schedule.enabled && schedule.client_id && newSecret) {
                 saveBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Setting up permissions...';
@@ -2439,6 +2561,7 @@ async function saveSchedule() {
                 
                 if (setupResult.success) {
                     let bodyHtml = '<p>Your auto-update schedule has been saved.</p>';
+                    bodyHtml += conversionInfo;
                     if (setupResult.permissionsAdded) {
                         bodyHtml += '<p>✅ Dynamics CRM permission added to your app registration.</p>';
                     }
@@ -2456,8 +2579,8 @@ async function saveSchedule() {
                 } else {
                     showModal({
                         title: 'Schedule Saved (Manual Setup Needed)',
-                        body: `<p>Your schedule has been saved, but automatic setup failed:</p>
-                            <p><strong>${setupResult.error}</strong></p>
+                        body: `<p>Your schedule has been saved.</p>${conversionInfo}
+                            <p><strong>⚠️ Automatic setup failed: ${setupResult.error}</strong></p>
                             <p>Please manually:</p>
                             <ol>
                                 <li>Add "Dynamics CRM → user_impersonation" permission to your app</li>
@@ -2471,7 +2594,7 @@ async function saveSchedule() {
             } else {
                 showModal({
                     title: 'Schedule Saved',
-                    body: '<p>Your auto-update schedule has been saved. Updates will run automatically at the scheduled time.</p>',
+                    body: `<p>Your auto-update schedule has been saved.</p>${conversionInfo}<p>Updates will run automatically at the scheduled time.</p>`,
                     type: 'success',
                     confirmOnly: true
                 });
