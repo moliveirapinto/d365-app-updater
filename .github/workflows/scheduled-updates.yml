@@ -99,10 +99,19 @@ jobs:
             echo "  Org:  $ORG"
             echo "  Want: day=$DAY time=$TIME tz=$TZ_NAME"
 
-            NOW_DAY=$(TZ="$TZ_NAME" date +%w)
-            NOW_HOUR=$(TZ="$TZ_NAME" date +%H):00
-            NOW_FULL=$(TZ="$TZ_NAME" date '+%A %H:%M %Z')
-            echo "  Now:  day=$NOW_DAY time=$NOW_HOUR ($NOW_FULL)"
+            # day_of_week and time_utc are stored as UTC values, so compare in UTC
+            NOW_DAY=$(date -u +%w)
+            NOW_HOUR=$(date -u +%H):00
+            NOW_FULL=$(date -u '+%A %H:%M UTC')
+            echo "  Now (UTC): day=$NOW_DAY time=$NOW_HOUR ($NOW_FULL)"
+
+            # --- Time check (do this FIRST to avoid unnecessary cred lookups) ---
+            if [ "$DAY" != "$NOW_DAY" ] || [ "$TIME" != "$NOW_HOUR" ]; then
+              echo "  SKIP: time mismatch (want day=$DAY $TIME, got day=$NOW_DAY $NOW_HOUR)"
+              echo ""; continue
+            fi
+
+            echo "  >>> TIME MATCH — proceeding with credentials <<<"
 
             # --- Credentials check ---
             if [ -z "$CID" ] || [ -z "$TID" ]; then
@@ -111,20 +120,19 @@ jobs:
               echo ""; continue
             fi
             if [ -z "$CSEC" ] || [ "$CSEC" = "null" ]; then
-              echo "  SKIP: no client_secret found"
+              # Try reading from schedule_secrets table
+              echo "  No client_secret in schedule record, checking schedule_secrets..."
+              CSEC=$(curl -sf "$SUPA_URL/rest/v1/schedule_secrets?schedule_id=eq.$ID&select=client_secret" \
+                -H "apikey: $SUPA_KEY" -H "Authorization: Bearer $SUPA_KEY" | jq -r '.[0].client_secret // empty')
+            fi
+            if [ -z "$CSEC" ] || [ "$CSEC" = "null" ]; then
+              echo "  SKIP: no client_secret found (checked update_schedules and schedule_secrets)"
               update_status "$ID" "no_secret"
               echo ""; continue
             fi
             echo "  Credentials: OK (cid=${CID:0:8}...)"
 
-            # --- Time check ---
-            if [ "$DAY" != "$NOW_DAY" ] || [ "$TIME" != "$NOW_HOUR" ]; then
-              echo "  SKIP: time mismatch (want day=$DAY $TIME, got day=$NOW_DAY $NOW_HOUR)"
-              update_status "$ID" "skipped"
-              echo ""; continue
-            fi
-
-            echo "  >>> TIME MATCH — running updates <<<"
+            echo "  >>> Running updates <<<"
 
             # ─── Get Power Platform token ───
             echo "  Acquiring PP token..."
