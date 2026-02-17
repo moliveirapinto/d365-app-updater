@@ -134,6 +134,23 @@ jobs:
 
             echo "  >>> Running updates <<<"
 
+            # ─── Helper: fetch all pages from a paginated PP/BAP API ───
+            fetch_all_pages() {
+              local url="$1" token="$2" all="[]" page=1
+              local next_url="$url"
+              while [ -n "$next_url" ] && [ "$page" -le 20 ]; do
+                local resp
+                resp=$(curl -s "$next_url" -H "Authorization: Bearer $token" -H "Accept: application/json")
+                local items
+                items=$(echo "$resp" | jq '[.value[]?]' 2>/dev/null)
+                [ -z "$items" ] || [ "$items" = "null" ] && items="[]"
+                all=$(echo "$all" "$items" | jq -s '.[0] + .[1]')
+                next_url=$(echo "$resp" | jq -r '.nextLink // empty' 2>/dev/null)
+                page=$((page + 1))
+              done
+              echo "$all"
+            }
+
             # ─── Get Power Platform token ───
             echo "  Acquiring PP token..."
             PP_RESP=$(curl -s -X POST "https://login.microsoftonline.com/$TID/oauth2/v2.0/token" \
@@ -161,33 +178,41 @@ jobs:
               echo "  BAP Token: OK"
             fi
 
-            # ─── Fetch installed apps (PP API) ───
-            echo "  Fetching installed apps (PP API)..."
-            INST=$(curl -s "https://api.powerplatform.com/appmanagement/environments/$ENV/applicationPackages?api-version=2022-03-01-preview" \
-              -H "Authorization: Bearer $PP_TOKEN")
-            ALL_APPS=$(echo "$INST" | jq '[.value[]?]' 2>/dev/null)
-            TOTAL_COUNT=$(echo "$ALL_APPS" | jq 'length' 2>/dev/null)
+            PP_BASE="https://api.powerplatform.com/appmanagement/environments/$ENV/applicationPackages"
+            PP_QS="api-version=2022-03-01-preview"
 
-            if [ -z "$TOTAL_COUNT" ] || [ "$TOTAL_COUNT" = "0" ] || [ "$TOTAL_COUNT" = "null" ]; then
-              echo "  No apps returned from PP API or API error"
-              echo "  Response preview: $(echo "$INST" | head -c 300)"
-              update_status "$ID" "api_error"
+            # ─── Step 1: Fetch INSTALLED apps explicitly (same as UI) ───
+            echo "  Fetching installed apps (appInstallState=Installed)..."
+            INSTALLED=$(fetch_all_pages "$PP_BASE?appInstallState=Installed&$PP_QS" "$PP_TOKEN")
+            INST_COUNT=$(echo "$INSTALLED" | jq 'length' 2>/dev/null)
+            echo "  Installed apps: $INST_COUNT"
+
+            if [ -z "$INST_COUNT" ] || [ "$INST_COUNT" = "0" ] || [ "$INST_COUNT" = "null" ]; then
+              echo "  No installed apps found — nothing to update"
+              update_status "$ID" "success"
               echo ""; continue
             fi
-            echo "  PP API returned: $TOTAL_COUNT total packages"
 
-            # Separate installed apps from catalog
-            INSTALLED=$(echo "$ALL_APPS" | jq '[.[] | select(.state != null and (.state | ascii_downcase | test("install|update")))]')
-            INST_COUNT=$(echo "$INSTALLED" | jq 'length')
-            echo "  Installed/updatable apps: $INST_COUNT"
+            # ─── Step 2: Fetch ALL catalog packages (same as UI) ───
+            echo "  Fetching catalog packages..."
+            ALL_APPS=$(fetch_all_pages "$PP_BASE?$PP_QS" "$PP_TOKEN")
+            TOTAL_COUNT=$(echo "$ALL_APPS" | jq 'length' 2>/dev/null)
+            echo "  Catalog packages: $TOTAL_COUNT"
 
-            # ─── Also fetch from BAP Admin API (this catches updates PP misses) ───
+            # ─── Step 2b: Fetch NotInstalled packages (same as UI) ───
+            echo "  Fetching NotInstalled packages..."
+            NOT_INSTALLED=$(fetch_all_pages "$PP_BASE?appInstallState=NotInstalled&$PP_QS" "$PP_TOKEN" 2>/dev/null || echo "[]")
+            NI_COUNT=$(echo "$NOT_INSTALLED" | jq 'length' 2>/dev/null)
+            echo "  NotInstalled packages: $NI_COUNT"
+
+            # Merge all catalog sources (same as UI: allCatalogEntries = [...allAppsRaw, ...notInstalledRaw])
+            CATALOG=$(echo "$ALL_APPS" "$NOT_INSTALLED" | jq -s '.[0] + .[1]')
+
+            # ─── Also fetch from BAP Admin API (catches updates PP misses) ───
             BAP_APPS="[]"
             if [ -n "$BAP_TOKEN" ]; then
               echo "  Fetching BAP Admin API..."
-              BAP_RAW=$(curl -s "https://api.bap.microsoft.com/providers/Microsoft.BusinessAppPlatform/scopes/admin/environments/$ENV/applicationPackages?api-version=2021-04-01" \
-                -H "Authorization: Bearer $BAP_TOKEN")
-              BAP_APPS=$(echo "$BAP_RAW" | jq '[.value[]?]' 2>/dev/null || echo "[]")
+              BAP_APPS=$(fetch_all_pages "https://api.bap.microsoft.com/providers/Microsoft.BusinessAppPlatform/scopes/admin/environments/$ENV/applicationPackages?api-version=2021-04-01" "$BAP_TOKEN" 2>/dev/null || echo "[]")
               BAP_COUNT=$(echo "$BAP_APPS" | jq 'length' 2>/dev/null)
               echo "  BAP API returned: $BAP_COUNT packages"
             fi
@@ -200,6 +225,8 @@ jobs:
             #   4. Catalog match by uniqueName base
             #   5. Catalog match by display name
             #   6. BAP API cross-check (all the above methods again)
+            # NOTE: INSTALLED = apps from appInstallState=Installed endpoint
+            #        CATALOG  = merged allCatalog + notInstalled (for version comparison)
 
             UPDATES_FILE=$(mktemp)
             > "$UPDATES_FILE"
@@ -251,7 +278,7 @@ jobs:
 
               # ── Check 3: Catalog match by applicationId ──
               if [ "$HAS_UPDATE" = false ] && [ -n "$AID" ]; then
-                CMATCH=$(echo "$ALL_APPS" | jq -r --arg id "$AID" \
+                CMATCH=$(echo "$CATALOG" | jq -r --arg id "$AID" \
                   '[.[] | select(.applicationId == $id)] | sort_by(.version) | last // empty')
                 if [ -n "$CMATCH" ] && [ "$CMATCH" != "null" ]; then
                   CVER=$(echo "$CMATCH" | jq -r '.version // empty')
@@ -268,7 +295,7 @@ jobs:
               # ── Check 4: Catalog match by uniqueName base ──
               if [ "$HAS_UPDATE" = false ] && [ -n "$AUNAME" ]; then
                 ABASE=$(base_name "$AUNAME")
-                CMATCH=$(echo "$ALL_APPS" | jq -r --arg bn "$ABASE" \
+                CMATCH=$(echo "$CATALOG" | jq -r --arg bn "$ABASE" \
                   '[.[] | select(.uniqueName != null) | select((.uniqueName | gsub("_upgrade$";"") | gsub("_[0-9]+$";"")) == $bn)] | sort_by(.version) | last // empty')
                 if [ -n "$CMATCH" ] && [ "$CMATCH" != "null" ]; then
                   CVER=$(echo "$CMATCH" | jq -r '.version // empty')
@@ -285,7 +312,7 @@ jobs:
               # ── Check 5: Catalog match by display name ──
               if [ "$HAS_UPDATE" = false ]; then
                 ANAME_LC=$(echo "$ANAME" | tr '[:upper:]' '[:lower:]')
-                CMATCH=$(echo "$ALL_APPS" | jq -r --arg dn "$ANAME_LC" \
+                CMATCH=$(echo "$CATALOG" | jq -r --arg dn "$ANAME_LC" \
                   '[.[] | select((.localizedName // .applicationName // "" | ascii_downcase) == $dn)] | sort_by(.version) | last // empty')
                 if [ -n "$CMATCH" ] && [ "$CMATCH" != "null" ]; then
                   CVER=$(echo "$CMATCH" | jq -r '.version // empty')
