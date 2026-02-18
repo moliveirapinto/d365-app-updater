@@ -1087,40 +1087,45 @@ async function loadApplications() {
                 }
             }
             
-            // Check 2: Compare with catalog entry by applicationId
-            if (!spaOnly && !hasUpdate && app.applicationId) {
+            // ALWAYS look up catalog uniqueName — even if hasUpdate was already set by
+            // state/flags above. The install API needs the CATALOG package's uniqueName
+            // (often has _upgrade suffix), NOT the installed app's uniqueName. Using the
+            // installed uniqueName results in a no-op (200 OK but no actual update).
+            
+            // Check 2: Catalog entry by applicationId
+            if (!spaOnly && app.applicationId) {
                 const catalogEntry = catalogMapById.get(app.applicationId);
                 if (catalogEntry && compareVersions(catalogEntry.version, app.version) > 0) {
-                    hasUpdate = true;
+                    if (!hasUpdate) hasUpdate = true;
                     latestVersion = catalogEntry.version;
                     catalogUniqueName = catalogEntry.uniqueName;
-                    console.log(`  [by appId] ${app.localizedName || app.uniqueName}: ${app.version} → ${latestVersion}`);
+                    console.log(`  [by appId] ${app.localizedName || app.uniqueName}: ${app.version} → ${latestVersion} (pkg: ${catalogUniqueName})`);
                 }
             }
             
-            // Check 3: Compare with catalog entry by uniqueName base
-            if (!spaOnly && !hasUpdate && app.uniqueName) {
+            // Check 3: Catalog entry by uniqueName base
+            if (!spaOnly && !catalogUniqueName && app.uniqueName) {
                 const baseName = app.uniqueName.replace(/_upgrade$/i, '').replace(/_\d+$/, '');
                 const byName = catalogByName.get(baseName);
                 if (byName && compareVersions(byName.version, app.version) > 0) {
-                    hasUpdate = true;
+                    if (!hasUpdate) hasUpdate = true;
                     latestVersion = byName.version;
                     catalogUniqueName = byName.uniqueName;
-                    console.log(`  [by name] ${app.localizedName || app.uniqueName}: ${app.version} → ${latestVersion}`);
+                    console.log(`  [by name] ${app.localizedName || app.uniqueName}: ${app.version} → ${latestVersion} (pkg: ${catalogUniqueName})`);
                 }
             }
             
-            // Check 4: Compare with catalog entry by localizedName / applicationName
-            if (!spaOnly && !hasUpdate) {
+            // Check 4: Catalog entry by localizedName / applicationName
+            if (!spaOnly && !catalogUniqueName) {
                 const appName = (app.localizedName || app.applicationName || '').toLowerCase();
                 if (appName) {
                     for (const [, catApp] of catalogMapById) {
                         const catName = (catApp.localizedName || catApp.applicationName || '').toLowerCase();
                         if (catName === appName && compareVersions(catApp.version, app.version) > 0) {
-                            hasUpdate = true;
+                            if (!hasUpdate) hasUpdate = true;
                             latestVersion = catApp.version;
                             catalogUniqueName = catApp.uniqueName;
-                            console.log(`  [by displayName] ${app.localizedName || app.uniqueName}: ${app.version} → ${latestVersion}`);
+                            console.log(`  [by displayName] ${app.localizedName || app.uniqueName}: ${app.version} → ${latestVersion} (pkg: ${catalogUniqueName})`);
                             break;
                         }
                     }
@@ -1824,7 +1829,10 @@ async function reinstallAllApps() {
             const installUniqueName = app.catalogUniqueName || app.uniqueName;
             const url = `https://api.powerplatform.com/appmanagement/environments/${environmentId}/applicationPackages/${installUniqueName}/install?api-version=2022-03-01-preview`;
             
-            console.log('Updating:', app.name, 'using package:', installUniqueName);
+            console.log(`[${i+1}/${appsToUpdate.length}] Updating: ${app.name}`);
+            console.log(`  installed pkg: ${app.uniqueName}`);
+            console.log(`  install pkg:   ${installUniqueName}${installUniqueName !== app.uniqueName ? ' ← CATALOG' : ' ← SAME AS INSTALLED (may be no-op!)'}`); 
+            console.log(`  version: ${app.version} → ${app.latestVersion || 'latest'}`);
             
             const response = await fetch(url, {
                 method: 'POST',
@@ -1835,6 +1843,8 @@ async function reinstallAllApps() {
             });
             
             if (response.ok) {
+                const responseBody = await response.text();
+                console.log(`  ✓ ${response.status} OK`, responseBody ? responseBody.substring(0, 200) : '(empty body)');
                 successCount++;
                 app.updateState = 'submitted';
                 app.hasUpdate = false;
@@ -1935,7 +1945,10 @@ async function updateSelectedApps() {
             const installUniqueName = app.catalogUniqueName || app.uniqueName;
             const url = `https://api.powerplatform.com/appmanagement/environments/${environmentId}/applicationPackages/${installUniqueName}/install?api-version=2022-03-01-preview`;
 
-            console.log('Updating:', app.name, 'using package:', installUniqueName);
+            console.log(`[${i+1}/${appsToUpdate.length}] Updating: ${app.name}`);
+            console.log(`  installed pkg: ${app.uniqueName}`);
+            console.log(`  install pkg:   ${installUniqueName}${installUniqueName !== app.uniqueName ? ' ← CATALOG' : ' ← SAME AS INSTALLED (may be no-op!)'}`);
+            console.log(`  version: ${app.version} → ${app.latestVersion || 'latest'}`);
 
             const response = await fetch(url, {
                 method: 'POST',
@@ -1946,6 +1959,8 @@ async function updateSelectedApps() {
             });
 
             if (response.ok) {
+                const responseBody = await response.text();
+                console.log(`  ✓ ${response.status} OK`, responseBody ? responseBody.substring(0, 200) : '(empty body)');
                 successCount++;
                 app.updateState = 'submitted';
                 app.hasUpdate = false;

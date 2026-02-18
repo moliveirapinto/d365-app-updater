@@ -284,22 +284,24 @@ jobs:
               esac
 
               # ── Check 2: Direct API fields ──
-              if [ "$HAS_UPDATE" = false ]; then
-                DIRECT_VER=$(echo "$app" | jq -r '(.catalogVersion // .availableVersion // .latestVersion // .newVersion // .updateVersion // empty)')
-                if [ -n "$DIRECT_VER" ] && ver_gt "$DIRECT_VER" "$AVER"; then
-                  HAS_UPDATE=true
-                  LATEST_VER="$DIRECT_VER"
-                  DETECT_METHOD="direct-field"
-                fi
-                UA=$(echo "$app" | jq -r '.updateAvailable // empty')
-                if [ "$UA" = "true" ] && [ "$HAS_UPDATE" = false ]; then
-                  HAS_UPDATE=true
-                  DETECT_METHOD="updateAvailable=true"
-                fi
+              DIRECT_VER=$(echo "$app" | jq -r '(.catalogVersion // .availableVersion // .latestVersion // .newVersion // .updateVersion // empty)')
+              if [ -n "$DIRECT_VER" ] && ver_gt "$DIRECT_VER" "$AVER"; then
+                HAS_UPDATE=true
+                LATEST_VER="$DIRECT_VER"
+                [ -z "$DETECT_METHOD" ] && DETECT_METHOD="direct-field"
+              fi
+              UA=$(echo "$app" | jq -r '.updateAvailable // empty')
+              if [ "$UA" = "true" ] && [ "$HAS_UPDATE" = false ]; then
+                HAS_UPDATE=true
+                [ -z "$DETECT_METHOD" ] && DETECT_METHOD="updateAvailable=true"
               fi
 
+              # ── ALWAYS look up catalog uniqueName (even if update already detected) ──
+              # The install API needs the CATALOG package's uniqueName, not the installed
+              # app's uniqueName. Using the installed one results in a no-op reinstall.
+
               # ── Check 3: Catalog match by applicationId ──
-              if [ "$HAS_UPDATE" = false ] && [ -n "$AID" ]; then
+              if [ -z "$INSTALL_PKG" ] && [ -n "$AID" ]; then
                 CMATCH=$(echo "$CATALOG" | jq -r --arg id "$AID" \
                   '[.[] | select(.applicationId == $id)] | sort_by(.version) | last // empty')
                 if [ -n "$CMATCH" ] && [ "$CMATCH" != "null" ]; then
@@ -309,13 +311,13 @@ jobs:
                     HAS_UPDATE=true
                     LATEST_VER="$CVER"
                     INSTALL_PKG="$CUNAME"
-                    DETECT_METHOD="catalog-by-appId"
+                    [ -z "$DETECT_METHOD" ] && DETECT_METHOD="catalog-by-appId"
                   fi
                 fi
               fi
 
               # ── Check 4: Catalog match by uniqueName base ──
-              if [ "$HAS_UPDATE" = false ] && [ -n "$AUNAME" ]; then
+              if [ -z "$INSTALL_PKG" ] && [ -n "$AUNAME" ]; then
                 ABASE=$(base_name "$AUNAME")
                 CMATCH=$(echo "$CATALOG" | jq -r --arg bn "$ABASE" \
                   '[.[] | select(.uniqueName != null) | select((.uniqueName | gsub("_upgrade$";"") | gsub("_[0-9]+$";"")) == $bn)] | sort_by(.version) | last // empty')
@@ -326,13 +328,13 @@ jobs:
                     HAS_UPDATE=true
                     LATEST_VER="$CVER"
                     INSTALL_PKG="$CUNAME"
-                    DETECT_METHOD="catalog-by-name"
+                    [ -z "$DETECT_METHOD" ] && DETECT_METHOD="catalog-by-name"
                   fi
                 fi
               fi
 
               # ── Check 5: Catalog match by display name ──
-              if [ "$HAS_UPDATE" = false ]; then
+              if [ -z "$INSTALL_PKG" ]; then
                 ANAME_LC=$(echo "$ANAME" | tr '[:upper:]' '[:lower:]')
                 CMATCH=$(echo "$CATALOG" | jq -r --arg dn "$ANAME_LC" \
                   '[.[] | select((.localizedName // .applicationName // "" | ascii_downcase) == $dn)] | sort_by(.version) | last // empty')
@@ -343,13 +345,13 @@ jobs:
                     HAS_UPDATE=true
                     LATEST_VER="$CVER"
                     INSTALL_PKG="$CUNAME"
-                    DETECT_METHOD="catalog-by-displayName"
+                    [ -z "$DETECT_METHOD" ] && DETECT_METHOD="catalog-by-displayName"
                   fi
                 fi
               fi
 
               # ── Check 6: BAP API cross-check ──
-              if [ "$HAS_UPDATE" = false ] && [ "$BAP_APPS" != "[]" ]; then
+              if [ -z "$INSTALL_PKG" ] && [ "$BAP_APPS" != "[]" ]; then
                 # 6a: BAP state-based
                 if [ -n "$AID" ]; then
                   BAP_INST=$(echo "$BAP_APPS" | jq -r --arg id "$AID" \
@@ -360,32 +362,32 @@ jobs:
                       *update*|updateavailable)
                         HAS_UPDATE=true
                         INSTALL_PKG=$(echo "$BAP_INST" | jq -r '.uniqueName // empty')
-                        DETECT_METHOD="BAP-state=$BAP_STATE"
+                        [ -z "$DETECT_METHOD" ] && DETECT_METHOD="BAP-state=$BAP_STATE"
                         ;;
                     esac
                     # BAP direct fields
-                    if [ "$HAS_UPDATE" = false ]; then
+                    if [ -z "$INSTALL_PKG" ]; then
                       BAP_DVER=$(echo "$BAP_INST" | jq -r '(.catalogVersion // .availableVersion // .latestVersion // empty)')
                       if [ -n "$BAP_DVER" ] && ver_gt "$BAP_DVER" "$AVER"; then
                         HAS_UPDATE=true
                         LATEST_VER="$BAP_DVER"
                         INSTALL_PKG=$(echo "$BAP_INST" | jq -r '.uniqueName // empty')
-                        DETECT_METHOD="BAP-direct"
+                        [ -z "$DETECT_METHOD" ] && DETECT_METHOD="BAP-direct"
                       fi
                     fi
-                    if [ "$HAS_UPDATE" = false ]; then
+                    if [ -z "$INSTALL_PKG" ] && [ "$HAS_UPDATE" = false ]; then
                       BAP_UA=$(echo "$BAP_INST" | jq -r '.updateAvailable // empty')
                       if [ "$BAP_UA" = "true" ]; then
                         HAS_UPDATE=true
                         INSTALL_PKG=$(echo "$BAP_INST" | jq -r '.uniqueName // empty')
-                        DETECT_METHOD="BAP-updateAvailable"
+                        [ -z "$DETECT_METHOD" ] && DETECT_METHOD="BAP-updateAvailable"
                       fi
                     fi
                   fi
                 fi
 
                 # 6b: BAP catalog version by applicationId
-                if [ "$HAS_UPDATE" = false ] && [ -n "$AID" ]; then
+                if [ -z "$INSTALL_PKG" ] && [ -n "$AID" ]; then
                   BAP_CAT=$(echo "$BAP_APPS" | jq -r --arg id "$AID" \
                     '[.[] | select(.applicationId == $id)] | sort_by(.version) | last // empty')
                   if [ -n "$BAP_CAT" ] && [ "$BAP_CAT" != "null" ]; then
@@ -401,7 +403,7 @@ jobs:
                 fi
 
                 # 6c: BAP by uniqueName base
-                if [ "$HAS_UPDATE" = false ] && [ -n "$AUNAME" ]; then
+                if [ -z "$INSTALL_PKG" ] && [ -n "$AUNAME" ]; then
                   ABASE=$(base_name "$AUNAME")
                   BAP_BN=$(echo "$BAP_APPS" | jq -r --arg bn "$ABASE" \
                     '[.[] | select(.uniqueName != null) | select((.uniqueName | gsub("_upgrade$";"") | gsub("_[0-9]+$";"")) == $bn)] | sort_by(.version) | last // empty')
@@ -418,7 +420,7 @@ jobs:
                 fi
 
                 # 6d: BAP by display name
-                if [ "$HAS_UPDATE" = false ]; then
+                if [ -z "$INSTALL_PKG" ]; then
                   ANAME_LC=$(echo "$ANAME" | tr '[:upper:]' '[:lower:]')
                   BAP_DN=$(echo "$BAP_APPS" | jq -r --arg dn "$ANAME_LC" \
                     '[.[] | select((.localizedName // .applicationName // "" | ascii_downcase) == $dn)] | sort_by(.version) | last // empty')
