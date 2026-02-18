@@ -947,6 +947,22 @@ async function fetchAllPages(url, token) {
     return allItems;
 }
 
+// Helper: refresh the Power Platform API token silently
+async function refreshPPToken() {
+    try {
+        const accounts = msalInstance.getAllAccounts();
+        if (!accounts || accounts.length === 0) return false;
+        const ppRequest = { scopes: ['https://api.powerplatform.com/.default'], account: accounts[0] };
+        const result = await msalInstance.acquireTokenSilent(ppRequest);
+        ppToken = result.accessToken;
+        console.log('PP token refreshed successfully');
+        return true;
+    } catch (e) {
+        console.warn('Failed to refresh PP token:', e.message);
+        return false;
+    }
+}
+
 // Helper: get BAP token for admin API calls
 async function getBAPToken() {
     const accounts = msalInstance.getAllAccounts();
@@ -1538,9 +1554,6 @@ function displayApplications() {
         }
         html += '</div>';
         html += '<div class="text-muted small mt-1"><i class="fas fa-building"></i> ' + escapeHtml(app.publisher) + '</div>';
-        if (app.updateState === 'failed' && app.updateError) {
-            html += '<div class="error-detail" title="' + escapeHtml(app.updateError) + '"><i class="fas fa-exclamation-circle me-1"></i>' + escapeHtml(app.updateError) + '</div>';
-        }
         if (showCheckbox) {
             html += '</div></div>'; // close checkbox wrapper divs
         }
@@ -1566,9 +1579,22 @@ function displayApplications() {
         } else {
             html += '<span class="text-success"><i class="fas fa-check-circle"></i> Up to date</span>';
         }
-        html += '</div>';
-        html += '</div>';
-        html += '</div>';
+        html += '</div>'; // close col-md-3
+        html += '</div>'; // close row
+        // Error detail spans full card width, below the row
+        if (app.updateState === 'failed' && app.updateError) {
+            const errorInfo = parseErrorMessage(app.updateError);
+            html += '<div class="error-detail mt-2">';
+            html += '<div class="error-summary"><i class="fas fa-exclamation-circle me-1"></i>' + escapeHtml(errorInfo.summary) + '</div>';
+            if (errorInfo.detail) {
+                const rawId = 'err-' + (app.uniqueName || '').replace(/[^a-zA-Z0-9]/g, '_');
+                html += '<span class="error-toggle" onclick="document.getElementById(\'' + rawId + '\').classList.toggle(\'show\')">';
+                html += '<i class="fas fa-chevron-down me-1"></i>Show details</span>';
+                html += '<div class="error-raw" id="' + rawId + '">' + escapeHtml(errorInfo.detail) + '</div>';
+            }
+            html += '</div>';
+        }
+        html += '</div>'; // close app-card
     }
     
     appsList.innerHTML = html;
@@ -1592,18 +1618,36 @@ async function updateSingleApp(uniqueName) {
     displayApplications();
     
     try {
+        // Refresh token to avoid stale auth
+        await refreshPPToken();
+        
         const installUniqueName = app.catalogUniqueName || app.uniqueName;
         const url = `https://api.powerplatform.com/appmanagement/environments/${environmentId}/applicationPackages/${installUniqueName}/install?api-version=2022-03-01-preview`;
         
         console.log('Installing update:', installUniqueName, 'for', app.name);
         
-        const response = await fetch(url, {
+        let response = await fetch(url, {
             method: 'POST',
             headers: {
                 'Authorization': `Bearer ${ppToken}`,
                 'Content-Type': 'application/json'
             }
         });
+        
+        // Retry once on 401 with fresh token
+        if (response.status === 401) {
+            console.log('Got 401, refreshing token and retrying...');
+            const refreshed = await refreshPPToken();
+            if (refreshed) {
+                response = await fetch(url, {
+                    method: 'POST',
+                    headers: {
+                        'Authorization': `Bearer ${ppToken}`,
+                        'Content-Type': 'application/json'
+                    }
+                });
+            }
+        }
         
         if (!response.ok) {
             const errorText = await response.text();
@@ -1644,15 +1688,29 @@ async function installApp(uniqueName) {
     displayApplications();
     
     try {
+        await refreshPPToken();
         const url = `https://api.powerplatform.com/appmanagement/environments/${environmentId}/applicationPackages/${app.uniqueName}/install?api-version=2022-03-01-preview`;
         
-        const response = await fetch(url, {
+        let response = await fetch(url, {
             method: 'POST',
             headers: {
                 'Authorization': `Bearer ${ppToken}`,
                 'Content-Type': 'application/json'
             }
         });
+        
+        if (response.status === 401) {
+            const refreshed = await refreshPPToken();
+            if (refreshed) {
+                response = await fetch(url, {
+                    method: 'POST',
+                    headers: {
+                        'Authorization': `Bearer ${ppToken}`,
+                        'Content-Type': 'application/json'
+                    }
+                });
+            }
+        }
         
         if (!response.ok) {
             const errorText = await response.text();
@@ -1686,17 +1744,31 @@ async function reinstallApp(uniqueName) {
     displayApplications();
     
     try {
+        await refreshPPToken();
         const url = `https://api.powerplatform.com/appmanagement/environments/${environmentId}/applicationPackages/${app.uniqueName}/install?api-version=2022-03-01-preview`;
         
         console.log('Updating:', app.name);
         
-        const response = await fetch(url, {
+        let response = await fetch(url, {
             method: 'POST',
             headers: {
                 'Authorization': `Bearer ${ppToken}`,
                 'Content-Type': 'application/json'
             }
         });
+        
+        if (response.status === 401) {
+            const refreshed = await refreshPPToken();
+            if (refreshed) {
+                response = await fetch(url, {
+                    method: 'POST',
+                    headers: {
+                        'Authorization': `Bearer ${ppToken}`,
+                        'Content-Type': 'application/json'
+                    }
+                });
+            }
+        }
         
         if (!response.ok) {
             const errorText = await response.text();
@@ -1741,6 +1813,10 @@ async function updateAllApps() {
     
     showLoading('Installing updates...', '0 of ' + appsToUpdate.length);
     
+    // Refresh token before starting the batch
+    await refreshPPToken();
+    let tokenRefreshedOnce = false;
+    
     for (let i = 0; i < appsToUpdate.length; i++) {
         const app = appsToUpdate[i];
         document.getElementById('loadingDetails').textContent = (i + 1) + ' of ' + appsToUpdate.length + ': ' + app.name;
@@ -1751,13 +1827,29 @@ async function updateAllApps() {
             
             console.log('Updating:', app.name, 'using package:', installUniqueName);
             
-            const response = await fetch(url, {
+            let response = await fetch(url, {
                 method: 'POST',
                 headers: {
                     'Authorization': `Bearer ${ppToken}`,
                     'Content-Type': 'application/json'
                 }
             });
+            
+            // Retry once on 401 with a fresh token
+            if (response.status === 401 && !tokenRefreshedOnce) {
+                console.log('Got 401, refreshing token and retrying...');
+                tokenRefreshedOnce = true;
+                const refreshed = await refreshPPToken();
+                if (refreshed) {
+                    response = await fetch(url, {
+                        method: 'POST',
+                        headers: {
+                            'Authorization': `Bearer ${ppToken}`,
+                            'Content-Type': 'application/json'
+                        }
+                    });
+                }
+            }
             
             if (response.ok) {
                 successCount++;
@@ -1821,6 +1913,10 @@ async function reinstallAllApps() {
     
     showLoading('Updating apps...', '0 of ' + appsToUpdate.length);
     
+    // Refresh token before starting the batch to avoid 401s mid-loop
+    await refreshPPToken();
+    let tokenRefreshedOnce = false;
+    
     for (let i = 0; i < appsToUpdate.length; i++) {
         const app = appsToUpdate[i];
         document.getElementById('loadingDetails').textContent = (i + 1) + ' of ' + appsToUpdate.length + ': ' + app.name;
@@ -1834,13 +1930,29 @@ async function reinstallAllApps() {
             console.log(`  install pkg:   ${installUniqueName}${installUniqueName !== app.uniqueName ? ' ← CATALOG' : ' ← SAME AS INSTALLED (may be no-op!)'}`); 
             console.log(`  version: ${app.version} → ${app.latestVersion || 'latest'}`);
             
-            const response = await fetch(url, {
+            let response = await fetch(url, {
                 method: 'POST',
                 headers: {
                     'Authorization': `Bearer ${ppToken}`,
                     'Content-Type': 'application/json'
                 }
             });
+            
+            // Retry once on 401 with a fresh token
+            if (response.status === 401 && !tokenRefreshedOnce) {
+                console.log('  Got 401 — refreshing token and retrying...');
+                tokenRefreshedOnce = true;
+                const refreshed = await refreshPPToken();
+                if (refreshed) {
+                    response = await fetch(url, {
+                        method: 'POST',
+                        headers: {
+                            'Authorization': `Bearer ${ppToken}`,
+                            'Content-Type': 'application/json'
+                        }
+                    });
+                }
+            }
             
             if (response.ok) {
                 const responseBody = await response.text();
@@ -1937,6 +2049,10 @@ async function updateSelectedApps() {
 
     showLoading('Updating selected apps...', '0 of ' + appsToUpdate.length);
 
+    // Refresh token before starting the batch
+    await refreshPPToken();
+    let tokenRefreshedOnce = false;
+
     for (let i = 0; i < appsToUpdate.length; i++) {
         const app = appsToUpdate[i];
         document.getElementById('loadingDetails').textContent = (i + 1) + ' of ' + appsToUpdate.length + ': ' + app.name;
@@ -1950,13 +2066,29 @@ async function updateSelectedApps() {
             console.log(`  install pkg:   ${installUniqueName}${installUniqueName !== app.uniqueName ? ' ← CATALOG' : ' ← SAME AS INSTALLED (may be no-op!)'}`);
             console.log(`  version: ${app.version} → ${app.latestVersion || 'latest'}`);
 
-            const response = await fetch(url, {
+            let response = await fetch(url, {
                 method: 'POST',
                 headers: {
                     'Authorization': `Bearer ${ppToken}`,
                     'Content-Type': 'application/json'
                 }
             });
+
+            // Retry once on 401 with a fresh token
+            if (response.status === 401 && !tokenRefreshedOnce) {
+                console.log('  Got 401 — refreshing token and retrying...');
+                tokenRefreshedOnce = true;
+                const refreshed = await refreshPPToken();
+                if (refreshed) {
+                    response = await fetch(url, {
+                        method: 'POST',
+                        headers: {
+                            'Authorization': `Bearer ${ppToken}`,
+                            'Content-Type': 'application/json'
+                        }
+                    });
+                }
+            }
 
             if (response.ok) {
                 const responseBody = await response.text();
@@ -3216,6 +3348,50 @@ function escapeHtml(text) {
     const div = document.createElement('div');
     div.textContent = text || '';
     return div.innerHTML;
+}
+
+// Parse API error messages into user-friendly summary + raw detail
+function parseErrorMessage(errorStr) {
+    if (!errorStr) return { summary: 'Unknown error', detail: '' };
+    
+    // Extract HTTP status code if present (e.g. "401 - {...}")
+    const statusMatch = errorStr.match(/^(\d{3})\s*-\s*(.*)/s);
+    const statusCode = statusMatch ? parseInt(statusMatch[1]) : null;
+    const body = statusMatch ? statusMatch[2].trim() : errorStr;
+    
+    // Try to parse JSON error body
+    let parsed = null;
+    try {
+        parsed = JSON.parse(body);
+    } catch (e) {
+        // Not JSON
+    }
+    
+    // Build user-friendly summary based on status code
+    let summary = '';
+    if (statusCode === 401 || (parsed && parsed.code === 'AuthorizationHeaderInvalid')) {
+        summary = 'Authorization failed — your session may have expired. Try signing out and back in, or check that the app registration has the required API permissions.';
+    } else if (statusCode === 403) {
+        summary = 'Access denied — you don\'t have permission to update this app. Check your Power Platform admin role.';
+    } else if (statusCode === 404) {
+        summary = 'Package not found — the update package may no longer be available in the catalog.';
+    } else if (statusCode === 429) {
+        summary = 'Too many requests — the API is rate-limiting. Please wait a few minutes and try again.';
+    } else if (statusCode >= 500) {
+        summary = 'Server error (' + statusCode + ') — the Power Platform service encountered an issue. Try again later.';
+    } else if (parsed && parsed.message) {
+        // Truncate the parsed message to first sentence
+        const msg = parsed.message;
+        const firstSentence = msg.split(/\.\s/)[0];
+        summary = firstSentence.length < msg.length ? firstSentence + '.' : msg;
+    } else {
+        summary = statusCode ? 'Error ' + statusCode + ' — update request failed.' : errorStr.substring(0, 120);
+    }
+    
+    // Raw detail is the full original error for those who want it
+    const detail = errorStr.length > summary.length + 20 ? errorStr : '';
+    
+    return { summary, detail };
 }
 
 // ── Custom Modal System ──────────────────────────────────────────────

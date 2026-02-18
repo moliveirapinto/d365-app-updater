@@ -257,17 +257,47 @@
             to { transform: rotate(360deg); }
         }
         .error-detail {
-            font-size: 0.78rem;
-            color: #dc3545;
-            margin-top: 4px;
-            max-width: 100%;
+            font-size: 0.8rem;
+            color: #842029;
+            background: #f8d7da;
+            border: 1px solid #f5c2c7;
+            border-radius: 6px;
+            padding: 0.5rem 0.75rem;
+            margin-top: 0.5rem;
             overflow: hidden;
-            text-overflow: ellipsis;
-            white-space: nowrap;
-        }
-        .error-detail:hover {
-            white-space: normal;
             word-break: break-word;
+            white-space: normal;
+            line-height: 1.4;
+        }
+        .error-detail .error-summary {
+            font-weight: 600;
+            margin-bottom: 0.25rem;
+        }
+        .error-detail .error-raw {
+            font-size: 0.72rem;
+            color: #6c757d;
+            margin-top: 0.35rem;
+            padding-top: 0.35rem;
+            border-top: 1px solid #f5c2c7;
+            max-height: 0;
+            overflow: hidden;
+            transition: max-height 0.3s ease;
+            cursor: pointer;
+        }
+        .error-detail .error-raw.show {
+            max-height: 200px;
+            overflow-y: auto;
+        }
+        .error-toggle {
+            font-size: 0.72rem;
+            color: #6c757d;
+            cursor: pointer;
+            text-decoration: underline;
+            margin-top: 0.25rem;
+            display: inline-block;
+        }
+        .error-toggle:hover {
+            color: #495057;
         }
         .app-name {
             font-weight: 600;
