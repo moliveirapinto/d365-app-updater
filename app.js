@@ -1815,32 +1815,33 @@ async function updateAllApps() {
     
     // Refresh token before starting the batch
     await refreshPPToken();
-    let tokenRefreshedOnce = false;
+    let tokenRefreshPromise = null;
+    let completed = 0;
+    const BATCH_SIZE = 5;
     
-    for (let i = 0; i < appsToUpdate.length; i++) {
-        const app = appsToUpdate[i];
-        document.getElementById('loadingDetails').textContent = (i + 1) + ' of ' + appsToUpdate.length + ': ' + app.name;
-        
-        try {
-            const installUniqueName = app.catalogUniqueName || app.uniqueName;
-            const url = `https://api.powerplatform.com/appmanagement/environments/${environmentId}/applicationPackages/${installUniqueName}/install?api-version=2022-03-01-preview`;
-            
-            console.log('Updating:', app.name, 'using package:', installUniqueName);
-            
-            let response = await fetch(url, {
-                method: 'POST',
-                headers: {
-                    'Authorization': `Bearer ${ppToken}`,
-                    'Content-Type': 'application/json'
-                }
-            });
-            
-            // Retry once on 401 with a fresh token
-            if (response.status === 401 && !tokenRefreshedOnce) {
-                console.log('Got 401, refreshing token and retrying...');
-                tokenRefreshedOnce = true;
-                const refreshed = await refreshPPToken();
-                if (refreshed) {
+    for (let i = 0; i < appsToUpdate.length; i += BATCH_SIZE) {
+        const batch = appsToUpdate.slice(i, i + BATCH_SIZE);
+        await Promise.allSettled(batch.map(async (app) => {
+            try {
+                const installUniqueName = app.catalogUniqueName || app.uniqueName;
+                const url = `https://api.powerplatform.com/appmanagement/environments/${environmentId}/applicationPackages/${installUniqueName}/install?api-version=2022-03-01-preview`;
+                
+                console.log('Updating:', app.name, 'using package:', installUniqueName);
+                
+                let response = await fetch(url, {
+                    method: 'POST',
+                    headers: {
+                        'Authorization': `Bearer ${ppToken}`,
+                        'Content-Type': 'application/json'
+                    }
+                });
+                
+                // Retry once on 401 with a fresh token (shared across batch)
+                if (response.status === 401) {
+                    if (!tokenRefreshPromise) {
+                        tokenRefreshPromise = refreshPPToken();
+                    }
+                    await tokenRefreshPromise;
                     response = await fetch(url, {
                         method: 'POST',
                         headers: {
@@ -1849,30 +1850,29 @@ async function updateAllApps() {
                         }
                     });
                 }
-            }
-            
-            if (response.ok) {
-                successCount++;
-                app.updateState = 'submitted';
-                app.hasUpdate = false;
-            } else {
+                
+                if (response.ok) {
+                    successCount++;
+                    app.updateState = 'submitted';
+                    app.hasUpdate = false;
+                } else {
+                    failCount++;
+                    const errorText = await response.text();
+                    app.updateState = 'failed';
+                    app.updateError = response.status + ' - ' + errorText;
+                    app.hasUpdate = true;
+                    console.error('Failed to update ' + app.name + ':', response.status);
+                }
+            } catch (error) {
                 failCount++;
-                const errorText = await response.text();
                 app.updateState = 'failed';
-                app.updateError = response.status + ' - ' + errorText;
+                app.updateError = error.message;
                 app.hasUpdate = true;
-                console.error('Failed to update ' + app.name + ':', response.status);
+                console.error('Error updating ' + app.name + ':', error);
             }
-        } catch (error) {
-            failCount++;
-            app.updateState = 'failed';
-            app.updateError = error.message;
-            app.hasUpdate = true;
-            console.error('Error updating ' + app.name + ':', error);
-        }
-        
-        // Small delay between requests
-        await new Promise(r => setTimeout(r, 1000));
+            completed++;
+            document.getElementById('loadingDetails').textContent = completed + ' of ' + appsToUpdate.length + ' completed';
+        }));
     }
     
     hideLoading();
@@ -1915,35 +1915,36 @@ async function reinstallAllApps() {
     
     // Refresh token before starting the batch to avoid 401s mid-loop
     await refreshPPToken();
-    let tokenRefreshedOnce = false;
+    let tokenRefreshPromise = null;
+    let completed = 0;
+    const BATCH_SIZE = 5;
     
-    for (let i = 0; i < appsToUpdate.length; i++) {
-        const app = appsToUpdate[i];
-        document.getElementById('loadingDetails').textContent = (i + 1) + ' of ' + appsToUpdate.length + ': ' + app.name;
-        
-        try {
-            const installUniqueName = app.catalogUniqueName || app.uniqueName;
-            const url = `https://api.powerplatform.com/appmanagement/environments/${environmentId}/applicationPackages/${installUniqueName}/install?api-version=2022-03-01-preview`;
-            
-            console.log(`[${i+1}/${appsToUpdate.length}] Updating: ${app.name}`);
-            console.log(`  installed pkg: ${app.uniqueName}`);
-            console.log(`  install pkg:   ${installUniqueName}${installUniqueName !== app.uniqueName ? ' ← CATALOG' : ' ← SAME AS INSTALLED (may be no-op!)'}`); 
-            console.log(`  version: ${app.version} → ${app.latestVersion || 'latest'}`);
-            
-            let response = await fetch(url, {
-                method: 'POST',
-                headers: {
-                    'Authorization': `Bearer ${ppToken}`,
-                    'Content-Type': 'application/json'
-                }
-            });
-            
-            // Retry once on 401 with a fresh token
-            if (response.status === 401 && !tokenRefreshedOnce) {
-                console.log('  Got 401 — refreshing token and retrying...');
-                tokenRefreshedOnce = true;
-                const refreshed = await refreshPPToken();
-                if (refreshed) {
+    for (let i = 0; i < appsToUpdate.length; i += BATCH_SIZE) {
+        const batch = appsToUpdate.slice(i, i + BATCH_SIZE);
+        await Promise.allSettled(batch.map(async (app) => {
+            try {
+                const installUniqueName = app.catalogUniqueName || app.uniqueName;
+                const url = `https://api.powerplatform.com/appmanagement/environments/${environmentId}/applicationPackages/${installUniqueName}/install?api-version=2022-03-01-preview`;
+                
+                console.log(`Updating: ${app.name}`);
+                console.log(`  installed pkg: ${app.uniqueName}`);
+                console.log(`  install pkg:   ${installUniqueName}${installUniqueName !== app.uniqueName ? ' ← CATALOG' : ' ← SAME AS INSTALLED (may be no-op!)'}`); 
+                console.log(`  version: ${app.version} → ${app.latestVersion || 'latest'}`);
+                
+                let response = await fetch(url, {
+                    method: 'POST',
+                    headers: {
+                        'Authorization': `Bearer ${ppToken}`,
+                        'Content-Type': 'application/json'
+                    }
+                });
+                
+                // Retry once on 401 with a fresh token (shared across batch)
+                if (response.status === 401) {
+                    if (!tokenRefreshPromise) {
+                        tokenRefreshPromise = refreshPPToken();
+                    }
+                    await tokenRefreshPromise;
                     response = await fetch(url, {
                         method: 'POST',
                         headers: {
@@ -1952,32 +1953,31 @@ async function reinstallAllApps() {
                         }
                     });
                 }
-            }
-            
-            if (response.ok) {
-                const responseBody = await response.text();
-                console.log(`  ✓ ${response.status} OK`, responseBody ? responseBody.substring(0, 200) : '(empty body)');
-                successCount++;
-                app.updateState = 'submitted';
-                app.hasUpdate = false;
-            } else {
+                
+                if (response.ok) {
+                    const responseBody = await response.text();
+                    console.log(`  ✓ ${response.status} OK`, responseBody ? responseBody.substring(0, 200) : '(empty body)');
+                    successCount++;
+                    app.updateState = 'submitted';
+                    app.hasUpdate = false;
+                } else {
+                    failCount++;
+                    const errorText = await response.text();
+                    app.updateState = 'failed';
+                    app.updateError = response.status + ' - ' + errorText;
+                    app.hasUpdate = true;
+                    console.error('Failed to update ' + app.name + ':', response.status);
+                }
+            } catch (error) {
                 failCount++;
-                const errorText = await response.text();
                 app.updateState = 'failed';
-                app.updateError = response.status + ' - ' + errorText;
+                app.updateError = error.message;
                 app.hasUpdate = true;
-                console.error('Failed to update ' + app.name + ':', response.status);
+                console.error('Error updating ' + app.name + ':', error);
             }
-        } catch (error) {
-            failCount++;
-            app.updateState = 'failed';
-            app.updateError = error.message;
-            app.hasUpdate = true;
-            console.error('Error updating ' + app.name + ':', error);
-        }
-        
-        // Small delay between requests to avoid rate limiting
-        await new Promise(r => setTimeout(r, 1500));
+            completed++;
+            document.getElementById('loadingDetails').textContent = completed + ' of ' + appsToUpdate.length + ' completed';
+        }));
     }
     
     hideLoading();
@@ -2051,35 +2051,36 @@ async function updateSelectedApps() {
 
     // Refresh token before starting the batch
     await refreshPPToken();
-    let tokenRefreshedOnce = false;
+    let tokenRefreshPromise = null;
+    let completed = 0;
+    const BATCH_SIZE = 5;
 
-    for (let i = 0; i < appsToUpdate.length; i++) {
-        const app = appsToUpdate[i];
-        document.getElementById('loadingDetails').textContent = (i + 1) + ' of ' + appsToUpdate.length + ': ' + app.name;
+    for (let i = 0; i < appsToUpdate.length; i += BATCH_SIZE) {
+        const batch = appsToUpdate.slice(i, i + BATCH_SIZE);
+        await Promise.allSettled(batch.map(async (app) => {
+            try {
+                const installUniqueName = app.catalogUniqueName || app.uniqueName;
+                const url = `https://api.powerplatform.com/appmanagement/environments/${environmentId}/applicationPackages/${installUniqueName}/install?api-version=2022-03-01-preview`;
 
-        try {
-            const installUniqueName = app.catalogUniqueName || app.uniqueName;
-            const url = `https://api.powerplatform.com/appmanagement/environments/${environmentId}/applicationPackages/${installUniqueName}/install?api-version=2022-03-01-preview`;
+                console.log(`Updating: ${app.name}`);
+                console.log(`  installed pkg: ${app.uniqueName}`);
+                console.log(`  install pkg:   ${installUniqueName}${installUniqueName !== app.uniqueName ? ' ← CATALOG' : ' ← SAME AS INSTALLED (may be no-op!)'}`);
+                console.log(`  version: ${app.version} → ${app.latestVersion || 'latest'}`);
 
-            console.log(`[${i+1}/${appsToUpdate.length}] Updating: ${app.name}`);
-            console.log(`  installed pkg: ${app.uniqueName}`);
-            console.log(`  install pkg:   ${installUniqueName}${installUniqueName !== app.uniqueName ? ' ← CATALOG' : ' ← SAME AS INSTALLED (may be no-op!)'}`);
-            console.log(`  version: ${app.version} → ${app.latestVersion || 'latest'}`);
+                let response = await fetch(url, {
+                    method: 'POST',
+                    headers: {
+                        'Authorization': `Bearer ${ppToken}`,
+                        'Content-Type': 'application/json'
+                    }
+                });
 
-            let response = await fetch(url, {
-                method: 'POST',
-                headers: {
-                    'Authorization': `Bearer ${ppToken}`,
-                    'Content-Type': 'application/json'
-                }
-            });
-
-            // Retry once on 401 with a fresh token
-            if (response.status === 401 && !tokenRefreshedOnce) {
-                console.log('  Got 401 — refreshing token and retrying...');
-                tokenRefreshedOnce = true;
-                const refreshed = await refreshPPToken();
-                if (refreshed) {
+                // Retry once on 401 with a fresh token (shared across batch)
+                if (response.status === 401) {
+                    if (!tokenRefreshPromise) {
+                        tokenRefreshPromise = refreshPPToken();
+                    }
+                    await tokenRefreshPromise;
                     response = await fetch(url, {
                         method: 'POST',
                         headers: {
@@ -2088,31 +2089,31 @@ async function updateSelectedApps() {
                         }
                     });
                 }
-            }
 
-            if (response.ok) {
-                const responseBody = await response.text();
-                console.log(`  ✓ ${response.status} OK`, responseBody ? responseBody.substring(0, 200) : '(empty body)');
-                successCount++;
-                app.updateState = 'submitted';
-                app.hasUpdate = false;
-            } else {
+                if (response.ok) {
+                    const responseBody = await response.text();
+                    console.log(`  ✓ ${response.status} OK`, responseBody ? responseBody.substring(0, 200) : '(empty body)');
+                    successCount++;
+                    app.updateState = 'submitted';
+                    app.hasUpdate = false;
+                } else {
+                    failCount++;
+                    const errorText = await response.text();
+                    app.updateState = 'failed';
+                    app.updateError = response.status + ' - ' + errorText;
+                    app.hasUpdate = true;
+                    console.error('Failed to update ' + app.name + ':', response.status);
+                }
+            } catch (error) {
                 failCount++;
-                const errorText = await response.text();
                 app.updateState = 'failed';
-                app.updateError = response.status + ' - ' + errorText;
+                app.updateError = error.message;
                 app.hasUpdate = true;
-                console.error('Failed to update ' + app.name + ':', response.status);
+                console.error('Error updating ' + app.name + ':', error);
             }
-        } catch (error) {
-            failCount++;
-            app.updateState = 'failed';
-            app.updateError = error.message;
-            app.hasUpdate = true;
-            console.error('Error updating ' + app.name + ':', error);
-        }
-
-        await new Promise(r => setTimeout(r, 1500));
+            completed++;
+            document.getElementById('loadingDetails').textContent = completed + ' of ' + appsToUpdate.length + ' completed';
+        }));
     }
 
     hideLoading();
