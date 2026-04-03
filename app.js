@@ -1600,6 +1600,43 @@ function displayApplications() {
     appsList.innerHTML = html;
 }
 
+// Fetch with retry for transient server errors (500/502/503/504)
+async function fetchInstallWithRetry(url, appName, maxRetries = 3) {
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+        let response = await fetch(url, {
+            method: 'POST',
+            headers: {
+                'Authorization': `Bearer ${ppToken}`,
+                'Content-Type': 'application/json'
+            }
+        });
+
+        // Retry on 401 with a fresh token
+        if (response.status === 401) {
+            console.log(`  ${appName}: 401, refreshing token...`);
+            await refreshPPToken();
+            response = await fetch(url, {
+                method: 'POST',
+                headers: {
+                    'Authorization': `Bearer ${ppToken}`,
+                    'Content-Type': 'application/json'
+                }
+            });
+            if (response.status < 500) return response;
+        }
+
+        // Retry on transient server errors
+        if (response.status >= 500 && attempt < maxRetries) {
+            const delay = Math.min(2000 * Math.pow(2, attempt), 15000);
+            console.warn(`  ⚠ ${appName}: ${response.status} on attempt ${attempt + 1}/${maxRetries + 1}, retrying in ${delay}ms...`);
+            await new Promise(r => setTimeout(r, delay));
+            continue;
+        }
+
+        return response;
+    }
+}
+
 // Update a single app
 async function updateSingleApp(uniqueName) {
     const app = apps.find(a => a.uniqueName === uniqueName);
@@ -1626,28 +1663,7 @@ async function updateSingleApp(uniqueName) {
         
         console.log('Installing update:', installUniqueName, 'for', app.name);
         
-        let response = await fetch(url, {
-            method: 'POST',
-            headers: {
-                'Authorization': `Bearer ${ppToken}`,
-                'Content-Type': 'application/json'
-            }
-        });
-        
-        // Retry once on 401 with fresh token
-        if (response.status === 401) {
-            console.log('Got 401, refreshing token and retrying...');
-            const refreshed = await refreshPPToken();
-            if (refreshed) {
-                response = await fetch(url, {
-                    method: 'POST',
-                    headers: {
-                        'Authorization': `Bearer ${ppToken}`,
-                        'Content-Type': 'application/json'
-                    }
-                });
-            }
-        }
+        const response = await fetchInstallWithRetry(url, app.name);
         
         if (!response.ok) {
             const errorText = await response.text();
@@ -1691,26 +1707,7 @@ async function installApp(uniqueName) {
         await refreshPPToken();
         const url = `https://api.powerplatform.com/appmanagement/environments/${environmentId}/applicationPackages/${app.uniqueName}/install?api-version=2022-03-01-preview`;
         
-        let response = await fetch(url, {
-            method: 'POST',
-            headers: {
-                'Authorization': `Bearer ${ppToken}`,
-                'Content-Type': 'application/json'
-            }
-        });
-        
-        if (response.status === 401) {
-            const refreshed = await refreshPPToken();
-            if (refreshed) {
-                response = await fetch(url, {
-                    method: 'POST',
-                    headers: {
-                        'Authorization': `Bearer ${ppToken}`,
-                        'Content-Type': 'application/json'
-                    }
-                });
-            }
-        }
+        const response = await fetchInstallWithRetry(url, app.name);
         
         if (!response.ok) {
             const errorText = await response.text();
@@ -1749,26 +1746,7 @@ async function reinstallApp(uniqueName) {
         
         console.log('Updating:', app.name);
         
-        let response = await fetch(url, {
-            method: 'POST',
-            headers: {
-                'Authorization': `Bearer ${ppToken}`,
-                'Content-Type': 'application/json'
-            }
-        });
-        
-        if (response.status === 401) {
-            const refreshed = await refreshPPToken();
-            if (refreshed) {
-                response = await fetch(url, {
-                    method: 'POST',
-                    headers: {
-                        'Authorization': `Bearer ${ppToken}`,
-                        'Content-Type': 'application/json'
-                    }
-                });
-            }
-        }
+        const response = await fetchInstallWithRetry(url, app.name);
         
         if (!response.ok) {
             const errorText = await response.text();
@@ -1815,7 +1793,6 @@ async function updateAllApps() {
     
     // Refresh token before starting the batch
     await refreshPPToken();
-    let tokenRefreshPromise = null;
     let completed = 0;
     const BATCH_SIZE = 5;
     
@@ -1828,28 +1805,7 @@ async function updateAllApps() {
                 
                 console.log('Updating:', app.name, 'using package:', installUniqueName);
                 
-                let response = await fetch(url, {
-                    method: 'POST',
-                    headers: {
-                        'Authorization': `Bearer ${ppToken}`,
-                        'Content-Type': 'application/json'
-                    }
-                });
-                
-                // Retry once on 401 with a fresh token (shared across batch)
-                if (response.status === 401) {
-                    if (!tokenRefreshPromise) {
-                        tokenRefreshPromise = refreshPPToken();
-                    }
-                    await tokenRefreshPromise;
-                    response = await fetch(url, {
-                        method: 'POST',
-                        headers: {
-                            'Authorization': `Bearer ${ppToken}`,
-                            'Content-Type': 'application/json'
-                        }
-                    });
-                }
+                const response = await fetchInstallWithRetry(url, app.name);
                 
                 if (response.ok) {
                     successCount++;
@@ -1915,7 +1871,6 @@ async function reinstallAllApps() {
     
     // Refresh token before starting the batch to avoid 401s mid-loop
     await refreshPPToken();
-    let tokenRefreshPromise = null;
     let completed = 0;
     const BATCH_SIZE = 5;
     
@@ -1931,28 +1886,7 @@ async function reinstallAllApps() {
                 console.log(`  install pkg:   ${installUniqueName}${installUniqueName !== app.uniqueName ? ' ← CATALOG' : ' ← SAME AS INSTALLED (may be no-op!)'}`); 
                 console.log(`  version: ${app.version} → ${app.latestVersion || 'latest'}`);
                 
-                let response = await fetch(url, {
-                    method: 'POST',
-                    headers: {
-                        'Authorization': `Bearer ${ppToken}`,
-                        'Content-Type': 'application/json'
-                    }
-                });
-                
-                // Retry once on 401 with a fresh token (shared across batch)
-                if (response.status === 401) {
-                    if (!tokenRefreshPromise) {
-                        tokenRefreshPromise = refreshPPToken();
-                    }
-                    await tokenRefreshPromise;
-                    response = await fetch(url, {
-                        method: 'POST',
-                        headers: {
-                            'Authorization': `Bearer ${ppToken}`,
-                            'Content-Type': 'application/json'
-                        }
-                    });
-                }
+                const response = await fetchInstallWithRetry(url, app.name);
                 
                 if (response.ok) {
                     const responseBody = await response.text();
@@ -2051,7 +1985,6 @@ async function updateSelectedApps() {
 
     // Refresh token before starting the batch
     await refreshPPToken();
-    let tokenRefreshPromise = null;
     let completed = 0;
     const BATCH_SIZE = 5;
 
@@ -2067,28 +2000,7 @@ async function updateSelectedApps() {
                 console.log(`  install pkg:   ${installUniqueName}${installUniqueName !== app.uniqueName ? ' ← CATALOG' : ' ← SAME AS INSTALLED (may be no-op!)'}`);
                 console.log(`  version: ${app.version} → ${app.latestVersion || 'latest'}`);
 
-                let response = await fetch(url, {
-                    method: 'POST',
-                    headers: {
-                        'Authorization': `Bearer ${ppToken}`,
-                        'Content-Type': 'application/json'
-                    }
-                });
-
-                // Retry once on 401 with a fresh token (shared across batch)
-                if (response.status === 401) {
-                    if (!tokenRefreshPromise) {
-                        tokenRefreshPromise = refreshPPToken();
-                    }
-                    await tokenRefreshPromise;
-                    response = await fetch(url, {
-                        method: 'POST',
-                        headers: {
-                            'Authorization': `Bearer ${ppToken}`,
-                            'Content-Type': 'application/json'
-                        }
-                    });
-                }
+                const response = await fetchInstallWithRetry(url, app.name);
 
                 if (response.ok) {
                     const responseBody = await response.text();
