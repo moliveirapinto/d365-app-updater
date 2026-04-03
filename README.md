@@ -2,6 +2,9 @@
 
 A web-based tool to manage and update Microsoft Dynamics 365 / Power Platform applications in bulk. This tool addresses the limitation in the Power Platform Admin Center where you can only update apps one at a time.
 
+You can access the live version here: `https://moliveirapinto.github.io/d365-app-updater/`
+
+
 ## 🎯 Features
 
 - ✅ **Bulk App Updates**: Update all available apps at once
