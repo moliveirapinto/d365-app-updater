@@ -2489,7 +2489,7 @@ function convertFromUTC(dayOfWeekUtc, timeUtc, timezone) {
     };
 }
 
-async function saveSchedule() {
+async function saveSchedule(clientIdOverride) {
     const cfg = getSupabaseConfig();
     if (!cfg) {
         showError('Scheduling requires Supabase configuration.');
@@ -2526,7 +2526,7 @@ async function saveSchedule() {
         day_of_week: utcSchedule.day_of_week_utc,  // CONVERTED to UTC
         time_utc: utcSchedule.time_utc,             // CONVERTED to UTC
         timezone: selectedTimezone,                 // Store original timezone for display
-        client_id: getCurrentClientId(),
+        client_id: clientIdOverride || getCurrentClientId(),
         tenant_id: getCurrentTenantId(),
         updated_at: new Date().toISOString()
     };
@@ -3574,13 +3574,38 @@ async function autoSetupSchedule() {
             return;
         }
         const findData = await findResp.json();
-        if (!findData.value || findData.value.length === 0) {
-            updateLastStep('App Registration not found in your tenant. Ensure the Client ID you used to log in belongs to your Azure AD tenant.', 'error');
-            resetBtn();
-            return;
+        let appReg = null;
+        let newAppCreated = false;
+
+        if (findData.value && findData.value.length > 0) {
+            appReg = findData.value[0];
+            updateLastStep('Found: "' + appReg.displayName + '"', 'done');
+        } else {
+            // Not found = likely using a shared/multi-tenant client ID.
+            // Create a new App Registration in the user's own tenant.
+            updateLastStep('App not found in your tenant (using shared login). Creating a dedicated one...', 'warn');
+            addStep('Creating App Registration "D365 App Updater - Schedule"...');
+            const createResp = await fetch(
+                'https://graph.microsoft.com/v1.0/applications',
+                {
+                    method: 'POST',
+                    headers: { 'Authorization': 'Bearer ' + graphToken, 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        displayName: 'D365 App Updater - Schedule',
+                        signInAudience: 'AzureADMyOrg'
+                    })
+                }
+            );
+            if (!createResp.ok) {
+                const errData = await createResp.json().catch(function() { return {}; });
+                updateLastStep('Failed to create App Registration: ' + (errData.error && errData.error.message ? errData.error.message : createResp.status), 'error');
+                resetBtn();
+                return;
+            }
+            appReg = await createResp.json();
+            newAppCreated = true;
+            updateLastStep('Created "D365 App Updater - Schedule" (ID: ' + appReg.appId + ')', 'done');
         }
-        const appReg = findData.value[0];
-        updateLastStep('Found: "' + appReg.displayName + '"', 'done');
 
         // Step 3: Add client secret (2-year expiry)
         addStep('Generating client secret (expires in 2 years)...');
@@ -3618,12 +3643,25 @@ async function autoSetupSchedule() {
         addStep('Saving schedule...');
         const secretInput = document.getElementById('scheduleClientSecret');
         if (secretInput) secretInput.value = secretValue;
-        await saveSchedule();
+        // If we created a new App Registration, pass its appId so it gets saved correctly
+        await saveSchedule(newAppCreated ? appReg.appId : undefined);
         updateLastStep('Schedule saved!', 'done');
 
         btn.disabled = false;
         btn.style.background = '#16a34a';
         btn.innerHTML = '<i class="fas fa-check-circle"></i> Setup Complete';
+
+        // If a new app was created, show admin consent note
+        if (newAppCreated) {
+            const tenantId = getCurrentTenantId() || 'common';
+            const consentUrl = 'https://login.microsoftonline.com/' + tenantId + '/adminconsent?client_id=' + appReg.appId;
+            addStep(
+                '<b>One more step:</b> An admin must grant Power Platform permissions to this new app. ' +
+                '<a href="' + consentUrl + '" target="_blank" rel="noopener" style="color:var(--blue);font-weight:600;">Grant Admin Consent</a> ' +
+                '(opens Microsoft login — sign in as an admin of your tenant).',
+                'warn'
+            );
+        }
 
     } catch (err) {
         addStep('Unexpected error: ' + err.message, 'error');
