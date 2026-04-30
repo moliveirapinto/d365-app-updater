@@ -2294,6 +2294,15 @@ async function loadSchedule() {
                 if (schedule.has_secret) {
                     secretInput.placeholder = '(secret securely saved - leave blank to keep)';
                     secretInput.value = ''; // Clear any value
+                    // Setup already done — disable Auto-Setup, only Save Schedule is needed
+                    const autoBtn = document.getElementById('autoSetupBtn');
+                    if (autoBtn) {
+                        autoBtn.disabled = true;
+                        autoBtn.title = 'Already configured — click Auto-Setup again only if you need to reset credentials';
+                        autoBtn.innerHTML = '<i class=\'fas fa-check-circle\'></i> Configured';
+                        autoBtn.style.background = '#6b7280';
+                        autoBtn.style.cursor = 'default';
+                    }
                 } else {
                     // Check if user has a secret saved for another environment
                     try {
