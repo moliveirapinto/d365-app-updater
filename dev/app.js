@@ -153,6 +153,21 @@ document.addEventListener('DOMContentLoaded', async function() {
         return;
     }
 
+    // â•â•â• SSO from data-gen: override stale localStorage with URL params BEFORE any auth init â•â•â•
+    if (urlParams.get('autoConnect') === '1' && urlParams.get('orgUrl')) {
+        const ssoOrgUrl   = urlParams.get('orgUrl');
+        const ssoClientId = urlParams.get('clientId') || (typeof SHARED_CLIENT_ID !== 'undefined' ? SHARED_CLIENT_ID : '');
+        const ssoTenantId = urlParams.get('tenantId') || 'organizations';
+        // Clobber any stale cached creds so handleRedirectResponse() uses the right client
+        localStorage.setItem('d365_app_updater_creds', JSON.stringify({
+            orgUrl: ssoOrgUrl, tenantId: ssoTenantId, clientId: ssoClientId
+        }));
+        // Also wipe any stale MSAL cache that might trigger handleRedirectPromise on the wrong client
+        Object.keys(localStorage).forEach(k => { if (k.startsWith('msal.')) localStorage.removeItem(k); });
+        Object.keys(sessionStorage).forEach(k => { if (k.startsWith('msal.')) sessionStorage.removeItem(k); });
+        console.log('[SSO] Overrode cached creds with URL params, clientId=' + (ssoClientId||'').substring(0,8) + '...');
+    }
+
     logInfo('=== APP INITIALIZATION ===');
     logInfo('URL', { href: window.location.href, hash: window.location.hash ? 'present' : 'none', pathname: window.location.pathname });
     logInfo('Auth step in storage', sessionStorage.getItem('d365_auth_step'));
