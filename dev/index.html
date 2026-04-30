@@ -1,0 +1,998 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>D365 Power Platform App Updater (DEV)</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        * {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+        }
+        body {
+            background: #f5f6f8;
+            min-height: 100vh;
+            padding: 0;
+        }
+        .top-credit {
+            background: linear-gradient(90deg, #0078d4 0%, #005a9e 100%);
+            color: rgba(255,255,255,0.85);
+            text-align: center;
+            padding: 0.35rem 1rem;
+            font-size: 0.72rem;
+            letter-spacing: 0.02em;
+        }
+        .top-credit strong { color: #fff; font-weight: 600; }
+        .top-credit a { color: rgba(255,255,255,0.9); text-decoration: none; }
+        .top-credit a:hover { color: #fff; text-decoration: underline; }
+        .auth-page {
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 2rem 1rem;
+        }
+        .auth-wrapper {
+            width: 100%;
+            max-width: 460px;
+        }
+        .auth-brand {
+            text-align: center;
+            margin-bottom: 2rem;
+        }
+        .auth-brand .brand-icon {
+            width: 56px;
+            height: 56px;
+            background: #0078d4;
+            border-radius: 12px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            margin-bottom: 1rem;
+        }
+        .auth-brand .brand-icon i {
+            color: white;
+            font-size: 1.5rem;
+        }
+        .auth-brand h1 {
+            font-size: 1.5rem;
+            font-weight: 700;
+            color: #1a1a1a;
+            margin-bottom: 0.25rem;
+        }
+        .auth-brand p {
+            color: #6b7280;
+            font-size: 0.9rem;
+            margin: 0;
+        }
+        .main-card {
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.08), 0 4px 24px rgba(0,0,0,0.04);
+            border: 1px solid #e5e7eb;
+            padding: 2rem;
+            margin-bottom: 2rem;
+        }
+        .auth-section {
+            max-width: 460px;
+            margin: 0 auto;
+        }
+        .form-label {
+            font-weight: 500;
+            font-size: 0.875rem;
+            color: #374151;
+            margin-bottom: 0.375rem;
+        }
+        .form-label i {
+            color: #6b7280;
+            margin-right: 0.25rem;
+        }
+        .form-control {
+            border: 1px solid #d1d5db;
+            border-radius: 8px;
+            padding: 0.625rem 0.875rem;
+            font-size: 0.9rem;
+            transition: border-color 0.15s, box-shadow 0.15s;
+        }
+        .form-control:focus {
+            border-color: #0078d4;
+            box-shadow: 0 0 0 3px rgba(0, 120, 212, 0.12);
+        }
+        .form-control::placeholder {
+            color: #9ca3af;
+        }
+        .form-text {
+            font-size: 0.8rem;
+            color: #9ca3af;
+            margin-top: 0.375rem;
+        }
+        .btn-connect {
+            background: #0078d4;
+            border: none;
+            color: white;
+            font-weight: 600;
+            font-size: 0.95rem;
+            padding: 0.75rem 1.5rem;
+            border-radius: 8px;
+            transition: background 0.15s;
+        }
+        .btn-connect:hover {
+            background: #106ebe;
+            color: white;
+        }
+        .btn-connect:active {
+            background: #005a9e;
+        }
+        .btn-primary {
+            background: #0078d4;
+            border: none;
+        }
+        .btn-primary:hover {
+            background: #106ebe;
+        }
+        .info-alert {
+            background-color: #f0f7ff;
+            border: 1px solid #d0e3f7;
+            padding: 0.875rem 1rem;
+            margin-bottom: 1.5rem;
+            border-radius: 8px;
+            font-size: 0.85rem;
+            color: #1e40af;
+        }
+        .info-alert i {
+            color: #0078d4;
+        }
+        .divider {
+            display: flex;
+            align-items: center;
+            margin: 1.5rem 0;
+            color: #9ca3af;
+            font-size: 0.8rem;
+        }
+        .divider::before, .divider::after {
+            content: '';
+            flex: 1;
+            height: 1px;
+            background: #e5e7eb;
+        }
+        .divider span {
+            padding: 0 0.75rem;
+        }
+        .app-card {
+            border: 1px solid #e5e7eb;
+            border-radius: 10px;
+            padding: 1.5rem;
+            margin-bottom: 0.75rem;
+            transition: all 0.2s;
+            background: white;
+        }
+
+        /* Environment switcher */
+        .env-switcher { position: relative; }
+        .env-switcher-btn {
+            background: white; border: 1.5px solid #d1d5db; border-radius: 8px;
+            padding: 0.45rem 0.85rem; font-size: 0.88rem; cursor: pointer;
+            display: flex; align-items: center; gap: 0.5rem;
+            transition: border-color 0.2s, box-shadow 0.2s; max-width: 400px;
+            white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+        }
+        .env-switcher-btn:hover, .env-switcher-btn.open {
+            border-color: #0078d4; box-shadow: 0 0 0 3px rgba(0,120,212,0.1);
+        }
+        .env-switcher-btn .env-name { font-weight: 600; color: #1a1a1a; overflow: hidden; text-overflow: ellipsis; }
+        .env-switcher-btn .fa-chevron-down { font-size: 0.7rem; color: #9ca3af; transition: transform 0.2s; }
+        .env-switcher-btn.open .fa-chevron-down { transform: rotate(180deg); }
+        .env-dropdown {
+            position: absolute; top: calc(100% + 4px); left: 0; z-index: 1000;
+            background: white; border: 1px solid #e5e7eb; border-radius: 10px;
+            box-shadow: 0 8px 24px rgba(0,0,0,0.12); width: 380px; max-height: 420px;
+            display: none; overflow: hidden;
+        }
+        .env-dropdown.show { display: block; }
+        .env-search {
+            padding: 0.65rem 0.85rem; border-bottom: 1px solid #e5e7eb;
+        }
+        .env-search input {
+            width: 100%; border: 1.5px solid #e5e7eb; border-radius: 6px;
+            padding: 0.4rem 0.65rem 0.4rem 2rem; font-size: 0.82rem; outline: none;
+        }
+        .env-search input:focus { border-color: #0078d4; }
+        .env-search { position: relative; }
+        .env-search i { position: absolute; left: 1.2rem; top: 50%; transform: translateY(-50%); color: #9ca3af; font-size: 0.8rem; }
+        .env-list {
+            max-height: 340px; overflow-y: auto; padding: 0.35rem 0;
+        }
+        .env-item {
+            padding: 0.55rem 0.85rem; cursor: pointer; display: flex;
+            align-items: center; gap: 0.6rem; font-size: 0.84rem;
+            transition: background 0.15s;
+        }
+        .env-item:hover { background: #f3f4f6; }
+        .env-item.active { background: #e8f4fd; color: #0078d4; font-weight: 600; }
+        .env-item .env-item-icon { width: 28px; height: 28px; border-radius: 6px;
+            background: #f3f4f6; display: flex; align-items: center; justify-content: center;
+            font-size: 0.75rem; color: #6b7280; flex-shrink: 0;
+        }
+        .env-item.active .env-item-icon { background: #cce4f7; color: #0078d4; }
+        .env-item-details { overflow: hidden; }
+        .env-item-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .env-item-url { font-size: 0.72rem; color: #9ca3af; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .env-empty { text-align: center; padding: 1.5rem; color: #9ca3af; font-size: 0.85rem; }
+
+        /* Multi-select checkbox */
+        .app-select-cb {
+            width: 18px; height: 18px; accent-color: #0078d4; cursor: pointer;
+            margin-right: 0.5rem; flex-shrink: 0;
+        }
+        .app-card:hover {
+            box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+            border-color: #d1d5db;
+        }
+        .app-card.state-updating {
+            border-left: 4px solid #0d6efd;
+            background: #f0f7ff;
+        }
+        .app-card.state-submitted {
+            border-left: 4px solid #0d6efd;
+            background: #f0f7ff;
+        }
+        .app-card.state-failed {
+            border-left: 4px solid #dc3545;
+            background: #fff5f5;
+        }
+        .spinner-updating {
+            display: inline-block;
+            width: 14px;
+            height: 14px;
+            border: 2px solid #0d6efd;
+            border-top-color: transparent;
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+            margin-right: 6px;
+            vertical-align: middle;
+        }
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+        .error-detail {
+            font-size: 0.8rem;
+            color: #842029;
+            background: #f8d7da;
+            border: 1px solid #f5c2c7;
+            border-radius: 6px;
+            padding: 0.5rem 0.75rem;
+            margin-top: 0.5rem;
+            overflow: hidden;
+            word-break: break-word;
+            white-space: normal;
+            line-height: 1.4;
+        }
+        .error-detail .error-summary {
+            font-weight: 600;
+            margin-bottom: 0.25rem;
+        }
+        .error-detail .error-raw {
+            font-size: 0.72rem;
+            color: #6c757d;
+            margin-top: 0.35rem;
+            padding-top: 0.35rem;
+            border-top: 1px solid #f5c2c7;
+            max-height: 0;
+            overflow: hidden;
+            transition: max-height 0.3s ease;
+            cursor: pointer;
+        }
+        .error-detail .error-raw.show {
+            max-height: 200px;
+            overflow-y: auto;
+        }
+        .error-toggle {
+            font-size: 0.72rem;
+            color: #6c757d;
+            cursor: pointer;
+            text-decoration: underline;
+            margin-top: 0.25rem;
+            display: inline-block;
+        }
+        .error-toggle:hover {
+            color: #495057;
+        }
+        .app-name {
+            font-weight: 600;
+            font-size: 1rem;
+            color: #1a1a1a;
+        }
+        .app-version {
+            color: #6b7280;
+            font-size: 0.875rem;
+        }
+        .badge-update {
+            background-color: #28a745;
+            color: white;
+            padding: 0.5rem 1rem;
+            border-radius: 20px;
+            font-size: 0.85rem;
+        }
+        .badge-current {
+            background-color: #6c757d;
+            color: white;
+            padding: 0.5rem 1rem;
+            border-radius: 20px;
+            font-size: 0.85rem;
+        }
+        .spinner-border-sm {
+            width: 1rem;
+            height: 1rem;
+        }
+        .hidden {
+            display: none;
+        }
+        .bulk-actions {
+            position: sticky;
+            top: 20px;
+            background: white;
+            padding: 1rem;
+            border-radius: 10px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+            border: 1px solid #e5e7eb;
+            margin-bottom: 1.5rem;
+            z-index: 100;
+        }
+        .loading-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0,0,0,0.5);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            z-index: 9999;
+        }
+        .loading-content {
+            background: white;
+            padding: 2rem 3rem;
+            border-radius: 12px;
+            text-align: center;
+            box-shadow: 0 8px 32px rgba(0,0,0,0.12);
+        }
+        .setup-card {
+            background: #fafafa;
+            border: 1px solid #e5e7eb;
+            border-radius: 8px;
+            font-size: 0.875rem;
+        }
+        .setup-card h6 {
+            font-weight: 600;
+        }
+        #appsSection {
+            padding: 2rem 0;
+        }
+        /* Schedule Card */
+        .schedule-card {
+            background: linear-gradient(135deg, #f0f7ff 0%, #e8f4fd 100%);
+            border: 1px solid #cce4f7;
+            border-radius: 10px;
+            padding: 1rem 1.25rem;
+            margin-bottom: 1rem;
+        }
+        .schedule-card-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            cursor: pointer;
+        }
+        .schedule-card-header h6 {
+            margin: 0;
+            font-weight: 600;
+            color: #0078d4;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+        .schedule-toggle {
+            position: relative;
+            width: 48px;
+            height: 26px;
+        }
+        .schedule-toggle input {
+            opacity: 0;
+            width: 0;
+            height: 0;
+        }
+        .schedule-toggle .slider {
+            position: absolute;
+            cursor: pointer;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background-color: #ccc;
+            transition: 0.3s;
+            border-radius: 26px;
+        }
+        .schedule-toggle .slider:before {
+            position: absolute;
+            content: "";
+            height: 20px;
+            width: 20px;
+            left: 3px;
+            bottom: 3px;
+            background-color: white;
+            transition: 0.3s;
+            border-radius: 50%;
+        }
+        .schedule-toggle input:checked + .slider {
+            background-color: #0078d4;
+        }
+        .schedule-toggle input:checked + .slider:before {
+            transform: translateX(22px);
+        }
+        .schedule-details {
+            margin-top: 1rem;
+            padding-top: 1rem;
+            border-top: 1px solid #cce4f7;
+        }
+        .schedule-row {
+            display: flex;
+            gap: 1rem;
+            align-items: center;
+            flex-wrap: wrap;
+        }
+        .schedule-select {
+            padding: 0.5rem 0.75rem;
+            border: 1px solid #d1d5db;
+            border-radius: 6px;
+            font-size: 0.875rem;
+            background: white;
+        }
+        .schedule-select:focus {
+            border-color: #0078d4;
+            outline: none;
+            box-shadow: 0 0 0 3px rgba(0, 120, 212, 0.12);
+        }
+        .schedule-status {
+            font-size: 0.8rem;
+            color: #6b7280;
+            margin-top: 0.75rem;
+        }
+        .schedule-status.active {
+            color: #059669;
+        }
+        .schedule-save-btn {
+            background: #0078d4;
+            color: white;
+            border: none;
+            padding: 0.5rem 1rem;
+            border-radius: 6px;
+            font-size: 0.875rem;
+            font-weight: 500;
+            cursor: pointer;
+            transition: background 0.15s;
+        }
+        .schedule-save-btn:hover {
+            background: #106ebe;
+        }
+        .schedule-save-btn:disabled {
+            background: #9ca3af;
+            cursor: not-allowed;
+        }
+        .schedule-credentials {
+            margin-bottom: 0.5rem;
+        }
+        .schedule-input-row {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            margin-bottom: 0.5rem;
+        }
+        .schedule-input-row label {
+            min-width: 90px;
+        }
+        .schedule-input {
+            flex: 1;
+            padding: 0.5rem 0.75rem;
+            border: 1px solid #d1d5db;
+            border-radius: 6px;
+            font-size: 0.875rem;
+            font-family: monospace;
+            max-width: 350px;
+        }
+        .schedule-input:focus {
+            border-color: #0078d4;
+            outline: none;
+            box-shadow: 0 0 0 3px rgba(0, 120, 212, 0.12);
+        }
+        .toggle-secret-btn {
+            background: none;
+            border: 1px solid #d1d5db;
+            border-radius: 6px;
+            padding: 0.5rem 0.75rem;
+            cursor: pointer;
+            color: #6b7280;
+        }
+        .toggle-secret-btn:hover {
+            background: #f3f4f6;
+        }
+        /* Custom Modal */
+        .modal-overlay {
+            position: fixed;
+            inset: 0;
+            background: rgba(0,0,0,0.4);
+            backdrop-filter: blur(4px);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 10000;
+            padding: 1rem;
+            animation: modalFadeIn 0.15s ease-out;
+        }
+        @keyframes modalFadeIn {
+            from { opacity: 0; }
+            to { opacity: 1; }
+        }
+        .modal-dialog-custom {
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.15), 0 1px 3px rgba(0,0,0,0.08);
+            width: 100%;
+            max-width: 480px;
+            overflow: hidden;
+            animation: modalSlideIn 0.15s ease-out;
+        }
+        @keyframes modalSlideIn {
+            from { transform: translateY(-12px); opacity: 0; }
+            to { transform: translateY(0); opacity: 1; }
+        }
+        .modal-header-custom {
+            padding: 1.5rem 1.5rem 0;
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+        }
+        .modal-icon-wrap {
+            width: 40px;
+            height: 40px;
+            border-radius: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-shrink: 0;
+            font-size: 1.1rem;
+        }
+        .modal-icon-wrap.icon-info {
+            background: #e8f4fd;
+            color: #0078d4;
+        }
+        .modal-icon-wrap.icon-warning {
+            background: #fff3cd;
+            color: #856404;
+        }
+        .modal-icon-wrap.icon-success {
+            background: #d4edda;
+            color: #155724;
+        }
+        .modal-icon-wrap.icon-danger {
+            background: #f8d7da;
+            color: #721c24;
+        }
+        .modal-icon-wrap.icon-update {
+            background: #e8f5e9;
+            color: #2e7d32;
+        }
+        .modal-title-custom {
+            font-size: 1.05rem;
+            font-weight: 600;
+            color: #1a1a1a;
+            margin: 0;
+        }
+        .modal-body-custom {
+            padding: 1rem 1.5rem 1.25rem;
+            font-size: 0.9rem;
+            color: #4b5563;
+            line-height: 1.6;
+        }
+        .modal-body-custom .modal-message {
+            margin-bottom: 0.75rem;
+        }
+        .modal-body-custom .update-list {
+            max-height: 280px;
+            overflow-y: auto;
+            margin: 0;
+            padding: 0;
+            list-style: none;
+        }
+        .modal-body-custom .update-list li {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 0.5rem 0.75rem;
+            border-radius: 6px;
+            font-size: 0.85rem;
+            margin-bottom: 2px;
+        }
+        .modal-body-custom .update-list li:nth-child(odd) {
+            background: #f9fafb;
+        }
+        .modal-body-custom .update-list li .app-label {
+            font-weight: 500;
+            color: #1a1a1a;
+            flex: 1;
+            min-width: 0;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            margin-right: 0.75rem;
+        }
+        .modal-body-custom .update-list li .version-badge {
+            font-size: 0.78rem;
+            color: #6b7280;
+            white-space: nowrap;
+            flex-shrink: 0;
+        }
+        .modal-body-custom .update-list li .version-badge .arrow {
+            color: #22c55e;
+            margin: 0 0.25rem;
+        }
+        .modal-footer-custom {
+            padding: 0 1.5rem 1.5rem;
+            display: flex;
+            justify-content: flex-end;
+            gap: 0.5rem;
+        }
+        .btn-modal-cancel {
+            background: white;
+            border: 1px solid #d1d5db;
+            color: #374151;
+            font-weight: 500;
+            font-size: 0.875rem;
+            padding: 0.5rem 1.25rem;
+            border-radius: 8px;
+            transition: all 0.15s;
+        }
+        .btn-modal-cancel:hover {
+            background: #f9fafb;
+            border-color: #9ca3af;
+        }
+        .btn-modal-ok {
+            background: #0078d4;
+            border: none;
+            color: white;
+            font-weight: 500;
+            font-size: 0.875rem;
+            padding: 0.5rem 1.25rem;
+            border-radius: 8px;
+            transition: all 0.15s;
+        }
+        .btn-modal-ok:hover {
+            background: #106ebe;
+            color: white;
+        }
+        .btn-modal-ok.btn-success-modal {
+            background: #16a34a;
+        }
+        .btn-modal-ok.btn-success-modal:hover {
+            background: #15803d;
+        }
+        .btn-modal-ok.btn-danger-modal {
+            background: #dc2626;
+        }
+        .btn-modal-ok.btn-danger-modal:hover {
+            background: #b91c1c;
+        }
+    </style>
+</head>
+<body>
+    <!-- DEV BANNER (only on /dev/ test version) -->
+    <div style="background:#fff3cd; border-bottom:2px solid #ffc107; padding:8px 16px; text-align:center; font-family:Inter,system-ui,sans-serif; font-size:13px; color:#856404; font-weight:600;">
+        ðŸ§ª <strong>DEV / TEST VERSION</strong> â€” Production app is at <a href="https://moliveirapinto.github.io/d365-app-updater/" style="color:#856404; text-decoration:underline;">/d365-app-updater/</a>
+    </div>
+    <div class="top-credit">
+        <span>Built by <strong>Mauricio Oliveira</strong> — Contact Center GBB &nbsp;|&nbsp; <a href="mailto:mauricio.oliveira@microsoft.com">mauricio.oliveira@microsoft.com</a></span>
+    </div>
+    <div class="container">
+        <!-- Authentication Section -->
+        <div id="authSection">
+            <div class="auth-page">
+                <div class="auth-wrapper">
+                    <div class="auth-brand">
+                        <div class="brand-icon">
+                            <svg width="24" height="24" fill="none" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="m18.492 2.33 3.179 3.179a2.25 2.25 0 0 1 0 3.182l-2.584 2.584A2.25 2.25 0 0 1 21 13.5v5.25A2.25 2.25 0 0 1 18.75 21H5.25A2.25 2.25 0 0 1 3 18.75V5.25A2.25 2.25 0 0 1 5.25 3h5.25a2.25 2.25 0 0 1 2.225 1.915L15.31 2.33a2.25 2.25 0 0 1 3.182 0ZM4.5 18.75c0 .414.336.75.75.75l5.999-.001.001-6.75H4.5v6Zm8.249.749h6.001a.75.75 0 0 0 .75-.75V13.5a.75.75 0 0 0-.75-.75h-6.001v6.75Zm-2.249-15H5.25a.75.75 0 0 0-.75.75v6h6.75v-6a.75.75 0 0 0-.75-.75Zm2.25 4.81v1.94h1.94l-1.94-1.94Zm3.62-5.918-3.178 3.178a.75.75 0 0 0 0 1.061l3.179 3.179a.75.75 0 0 0 1.06 0l3.18-3.179a.75.75 0 0 0 0-1.06l-3.18-3.18a.75.75 0 0 0-1.06 0Z" fill="white"/></svg>
+                        </div>
+                        <h1>D365 App Updater</h1>
+                        <p>Check and update your Power Platform apps in one place</p>
+                    </div>
+
+                    <div class="main-card">
+                        <div class="info-alert">
+                            <i class="fas fa-info-circle me-1"></i>
+                            Update all available apps in your Power Platform environment at once — a feature not available in the standard admin portal.
+                        </div>
+
+                        <form id="authForm">
+                            <div class="mb-3">
+                                <label for="orgUrl" class="form-label">
+                                    <i class="fas fa-globe"></i> Organization URL
+                                </label>
+                                <input 
+                                    type="text" 
+                                    class="form-control" 
+                                    id="orgUrl" 
+                                    placeholder="https://yourorg.crm.dynamics.com"
+                                    required>
+                                <div class="form-text">
+                                    Your Dynamics 365 environment URL
+                                </div>
+                            </div>
+
+                            <div class="mb-3">
+                                <label for="clientId" class="form-label">
+                                    <i class="fas fa-key"></i> Application (Client) ID
+                                </label>
+                                <input 
+                                    type="text" 
+                                    class="form-control" 
+                                    id="clientId" 
+                                    placeholder="00000000-0000-0000-0000-000000000000"
+                                    value="c4ff0dc1-4cf0-44e1-8a26-7d265772484a"
+                                    required>
+                                <div class="form-text">Azure AD App Registration Client ID</div>
+                            </div>
+
+                            <div class="mb-3 form-check">
+                                <input type="checkbox" class="form-check-input" id="rememberMe">
+                                <label class="form-check-label" for="rememberMe" style="font-size: 0.875rem; color: #6b7280;">
+                                    Remember my credentials
+                                </label>
+                            </div>
+
+                            <button type="submit" class="btn btn-connect w-100">
+                                <i class="fas fa-sign-in-alt me-1"></i> Connect to Power Platform
+                            </button>
+                        </form>
+
+                        <div class="divider"><span>or</span></div>
+
+                        <a href="setup-wizard.html" class="btn w-100" style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; font-weight: 600; padding: 0.75rem; border: none; border-radius: 8px; text-decoration: none; display: inline-block;">
+                            <i class="fas fa-magic me-2"></i>Automated Setup Wizard
+                            <div style="font-size: 0.75rem; opacity: 0.9; font-weight: 400; margin-top: 0.25rem;">
+                                Don't have an app registration? Create one in 60 seconds!
+                            </div>
+                        </a>
+
+                        <div class="divider"><span>Need help?</span></div>
+
+                        <button class="btn btn-link w-100 p-0 text-decoration-none" style="font-size: 0.875rem; color: #6b7280;" data-bs-toggle="collapse" data-bs-target="#setupInstructions">
+                            <i class="fas fa-question-circle me-1"></i> How to set up Azure AD App Registration
+                        </button>
+                        <div class="collapse mt-3" id="setupInstructions">
+                            <div class="card card-body setup-card">
+                                <h6>Azure AD App Registration Setup</h6>
+                                <ol class="mb-0" style="padding-left: 1.25rem;">
+                                    <li>Go to <a href="https://portal.azure.com" target="_blank">Azure Portal</a></li>
+                                    <li>Navigate to <strong>Azure Active Directory → App registrations</strong></li>
+                                    <li>Click <strong>"New registration"</strong></li>
+                                    <li>Configure:
+                                        <ul>
+                                            <li>Name: <code>D365 App Updater</code></li>
+                                            <li>Account types: Single tenant</li>
+                                            <li>Platform: <strong>Single-page application (SPA)</strong></li>
+                                            <li>Redirect URI: <code id="redirectUri"></code></li>
+                                        </ul>
+                                    </li>
+                                    <li>Add API Permissions:
+                                        <ul>
+                                            <li>Dynamics CRM → user_impersonation</li>
+                                            <li>Grant admin consent</li>
+                                        </ul>
+                                    </li>
+                                </ol>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Apps Section -->
+        <div id="appsSection" class="hidden">
+            <div class="main-card">
+                <div class="d-flex justify-content-between align-items-center mb-4">
+                    <div class="d-flex align-items-center gap-2">
+                        <span style="font-size:1rem; font-weight:600; color:#374151;">Environment:</span>
+                        <div class="env-switcher">
+                            <button class="env-switcher-btn" id="envSwitcherBtn" onclick="toggleEnvDropdown()">
+                                <i class="fas fa-globe" style="color:#0078d4;"></i>
+                                <span class="env-name" id="environmentName">Loading...</span>
+                                <i class="fas fa-chevron-down"></i>
+                            </button>
+                            <div class="env-dropdown" id="envDropdown">
+                                <div class="env-search">
+                                    <i class="fas fa-search"></i>
+                                    <input type="text" id="envSearchInput" placeholder="Search environments..." oninput="filterEnvList()">
+                                </div>
+                                <div class="env-list" id="envList"></div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="d-flex align-items-center gap-2">
+                        <a href="admin.html" class="btn btn-outline-secondary" title="Admin Dashboard">
+                            <i class="fas fa-chart-bar"></i>
+                        </a>
+                        <button id="logoutBtn" class="btn btn-outline-danger">
+                            <i class="fas fa-sign-out-alt"></i> Logout
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Auto-Update Schedule -->
+                <div class="schedule-card" id="scheduleCard">
+                    <div class="schedule-card-header" onclick="toggleScheduleDetails()">
+                        <h6><i class="fas fa-clock"></i> Auto-Update Schedule</h6>
+                        <label class="schedule-toggle" onclick="event.stopPropagation()">
+                            <input type="checkbox" id="scheduleEnabled" onchange="handleScheduleToggle()">
+                            <span class="slider"></span>
+                        </label>
+                    </div>
+                    <div class="schedule-details" id="scheduleDetails" style="display: none;">
+                        <div class="schedule-credentials">
+                            <p style="font-size: 0.8rem; color: #6b7280; margin-bottom: 10px;">
+                                <i class="fas fa-info-circle"></i> Enter a Client Secret for your App Registration. 
+                                <a href="#" onclick="showCredentialsHelp(); return false;" style="color: #4f46e5;">How to create one</a>
+                            </p>
+                            <div class="schedule-input-row">
+                                <label style="font-size: 0.875rem; color: #374151;">Client Secret:</label>
+                                <input type="password" id="scheduleClientSecret" class="schedule-input" placeholder="Enter client secret">
+                                <button type="button" class="toggle-secret-btn" onclick="toggleSecretVisibility()">
+                                    <i class="fas fa-eye" id="secretToggleIcon"></i>
+                                </button>
+                            </div>
+                        </div>
+                        <hr style="border: none; border-top: 1px solid #e5e7eb; margin: 15px 0;">
+                        <div class="schedule-row">
+                            <label style="font-size: 0.875rem; color: #374151;">Run updates every</label>
+                            <select id="scheduleDay" class="schedule-select">
+                                <option value="0">Sunday</option>
+                                <option value="1">Monday</option>
+                                <option value="2">Tuesday</option>
+                                <option value="3">Wednesday</option>
+                                <option value="4">Thursday</option>
+                                <option value="5">Friday</option>
+                                <option value="6">Saturday</option>
+                            </select>
+                            <label style="font-size: 0.875rem; color: #374151;">at</label>
+                            <select id="scheduleTime" class="schedule-select">
+                                <option value="00:00">12:00 AM</option>
+                                <option value="01:00">1:00 AM</option>
+                                <option value="02:00">2:00 AM</option>
+                                <option value="03:00">3:00 AM</option>
+                                <option value="04:00">4:00 AM</option>
+                                <option value="05:00">5:00 AM</option>
+                                <option value="06:00">6:00 AM</option>
+                                <option value="07:00">7:00 AM</option>
+                                <option value="08:00">8:00 AM</option>
+                                <option value="09:00">9:00 AM</option>
+                                <option value="10:00">10:00 AM</option>
+                                <option value="11:00">11:00 AM</option>
+                                <option value="12:00">12:00 PM</option>
+                                <option value="13:00">1:00 PM</option>
+                                <option value="14:00">2:00 PM</option>
+                                <option value="15:00">3:00 PM</option>
+                                <option value="16:00">4:00 PM</option>
+                                <option value="17:00">5:00 PM</option>
+                                <option value="18:00">6:00 PM</option>
+                                <option value="19:00">7:00 PM</option>
+                                <option value="20:00">8:00 PM</option>
+                                <option value="21:00">9:00 PM</option>
+                                <option value="22:00">10:00 PM</option>
+                                <option value="23:00">11:00 PM</option>
+                            </select>
+                            <select id="scheduleTimezone" class="schedule-select">
+                                <option value="UTC">UTC</option>
+                                <option value="America/New_York">Eastern Time</option>
+                                <option value="America/Chicago">Central Time</option>
+                                <option value="America/Denver">Mountain Time</option>
+                                <option value="America/Los_Angeles">Pacific Time</option>
+                                <option value="Europe/London">London</option>
+                                <option value="Europe/Paris">Paris/Berlin</option>
+                                <option value="Asia/Tokyo">Tokyo</option>
+                                <option value="Australia/Sydney">Sydney</option>
+                            </select>
+                            <button class="schedule-save-btn" id="scheduleSaveBtn" onclick="saveSchedule()">
+                                <i class="fas fa-save"></i> Save Schedule
+                            </button>
+                        </div>
+                        <div class="schedule-status" id="scheduleStatus">
+                            <i class="fas fa-info-circle"></i> Schedule not configured
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Bulk Actions -->
+                <div class="bulk-actions">
+                    <div class="row align-items-center">
+                        <div class="col-md-6">
+                            <small class="text-muted" id="appCountText">Loading...</small>
+                        </div>
+                        <div class="col-md-6 text-end">
+                            <button id="refreshAppsBtn" class="btn btn-outline-primary me-2">
+                                <i class="fas fa-refresh"></i> Refresh
+                            </button>
+                            <button id="updateSelectedBtn" class="btn btn-primary me-2 d-none">
+                                <i class="fas fa-download"></i> Update Selected (<span id="selectedCount">0</span>)
+                            </button>
+                            <button id="reinstallAllBtn" class="btn btn-success" title="Apply available updates to all installed apps">
+                                <i class="fas fa-rocket"></i> Update All Apps
+                            </button>
+                            <button id="updateAllBtn" class="btn btn-outline-secondary d-none" disabled>
+                                <i class="fas fa-rocket"></i> Update All
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Apps List -->
+                <div id="appsList">
+                    <!-- Apps will be loaded here dynamically -->
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Loading Overlay -->
+    <div id="loadingOverlay" class="loading-overlay hidden" style="display: none;">
+        <div class="loading-content">
+            <div class="spinner-border text-primary mb-3" role="status">
+                <span class="visually-hidden">Loading...</span>
+            </div>
+            <h4 id="loadingMessage">Processing...</h4>
+            <p id="loadingDetails" class="text-muted"></p>
+        </div>
+    </div>
+
+    <!-- Custom Modal -->
+    <div id="customModal" class="modal-overlay" style="display: none;">
+        <div class="modal-dialog-custom">
+            <div class="modal-header-custom">
+                <div class="modal-icon-wrap" id="modalIconWrap">
+                    <i id="modalIcon" class="fas fa-info-circle"></i>
+                </div>
+                <h5 id="modalTitle" class="modal-title-custom">Title</h5>
+            </div>
+            <div class="modal-body-custom" id="modalBody">
+                <!-- Content injected dynamically -->
+            </div>
+            <div class="modal-footer-custom" id="modalFooter">
+                <button id="modalCancelBtn" class="btn btn-modal-cancel" onclick="closeModal(false)">Cancel</button>
+                <button id="modalOkBtn" class="btn btn-modal-ok" onclick="closeModal(true)">OK</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Debug Log Panel -->
+    <div id="logPanel" style="display:none; position:fixed; bottom:0; left:0; right:0; height:250px; 
+        background:#1e1e1e; border-top:2px solid #0078d4; z-index:10000; font-family:monospace; font-size:12px;">
+        <div style="display:flex; justify-content:space-between; align-items:center; padding:8px 12px; background:#252526; border-bottom:1px solid #333;">
+            <span style="color:#ccc; font-weight:bold;"><i class="fas fa-terminal"></i> Debug Logs</span>
+            <div>
+                <button onclick="clearLogs()" style="background:#444; color:#fff; border:none; padding:4px 10px; border-radius:4px; margin-right:5px; cursor:pointer;">Clear</button>
+                <button onclick="exportLogs()" style="background:#444; color:#fff; border:none; padding:4px 10px; border-radius:4px; margin-right:5px; cursor:pointer;">Export</button>
+                <button onclick="toggleLogPanel()" style="background:#d32f2f; color:#fff; border:none; padding:4px 10px; border-radius:4px; cursor:pointer;">Close</button>
+            </div>
+        </div>
+        <div id="logContent" style="height:calc(100% - 40px); overflow-y:auto; padding:8px 12px; color:#eee;"></div>
+    </div>
+    
+    <!-- Floating Log Toggle Button -->
+    <button id="logToggleBtn" onclick="toggleLogPanel()" 
+        style="position:fixed; bottom:15px; right:15px; width:48px; height:48px; border-radius:50%; 
+        background:#0078d4; color:white; border:none; cursor:pointer; z-index:9999; 
+        box-shadow:0 2px 8px rgba(0,0,0,0.3); font-size:18px;" title="Toggle Debug Logs">
+        <i class="fas fa-bug"></i>
+    </button>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="https://alcdn.msauth.net/browser/2.32.1/js/msal-browser.min.js"></script>
+    <script src="app.js"></script>
+</body>
+</html>
