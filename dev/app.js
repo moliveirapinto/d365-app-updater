@@ -3479,3 +3479,155 @@ function trySsoAutoConnect() {
     }
 }
 // â•â•â• END SSO BLOCK â•â•â•
+
+// ═══════════════════════════════════════════════════════════════════════════
+// AUTO-SETUP SCHEDULE: Creates client secret via Graph API automatically
+// ═══════════════════════════════════════════════════════════════════════════
+
+async function acquireGraphToken() {
+    if (!msalInstance) throw new Error('Not authenticated. Please log in first.');
+    const accounts = msalInstance.getAllAccounts();
+    if (!accounts.length) throw new Error('No active session. Please log in.');
+    const scopes = ['https://graph.microsoft.com/Application.ReadWrite.All'];
+    try {
+        const result = await msalInstance.acquireTokenSilent({ scopes, account: accounts[0] });
+        return result.accessToken;
+    } catch (silentErr) {
+        logWarn('Silent Graph token failed, trying popup', silentErr.message);
+        const result = await msalInstance.acquireTokenPopup({ scopes, account: accounts[0] });
+        return result.accessToken;
+    }
+}
+
+async function autoSetupSchedule() {
+    const btn = document.getElementById('autoSetupBtn');
+    const progress = document.getElementById('autoSetupProgress');
+    const stepsList = document.getElementById('autoSetupSteps');
+
+    btn.disabled = true;
+    btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Setting up...';
+    progress.style.display = 'block';
+    stepsList.innerHTML = '';
+
+    function addStep(text, status) {
+        const st = status || 'running';
+        const iconMap = { running: 'fas fa-spinner fa-spin', done: 'fas fa-check-circle', error: 'fas fa-times-circle', warn: 'fas fa-exclamation-circle' };
+        const colorMap = { running: 'var(--text-muted)', done: '#16a34a', error: '#dc2626', warn: '#d97706' };
+        const textColor = st === 'error' ? '#dc2626' : st === 'warn' ? '#d97706' : 'var(--text-primary)';
+        const li = document.createElement('li');
+        li.style.cssText = 'display:flex;align-items:flex-start;gap:0.6rem;padding:0.3rem 0.4rem;border-radius:4px;';
+        li.innerHTML = '<i class="' + iconMap[st] + '" style="font-size:0.8rem;color:' + colorMap[st] + ';width:14px;margin-top:2px;flex-shrink:0;"></i>' +
+            '<span style="color:' + textColor + ';font-size:0.82rem;">' + text + '</span>';
+        stepsList.appendChild(li);
+        return li;
+    }
+
+    function updateLastStep(text, status) {
+        const all = stepsList.querySelectorAll('li');
+        if (!all.length) return;
+        const last = all[all.length - 1];
+        const iconMap = { running: 'fas fa-spinner fa-spin', done: 'fas fa-check-circle', error: 'fas fa-times-circle', warn: 'fas fa-exclamation-circle' };
+        const colorMap = { running: 'var(--text-muted)', done: '#16a34a', error: '#dc2626', warn: '#d97706' };
+        const textColor = status === 'error' ? '#dc2626' : status === 'warn' ? '#d97706' : 'var(--text-primary)';
+        last.innerHTML = '<i class="' + iconMap[status] + '" style="font-size:0.8rem;color:' + colorMap[status] + ';width:14px;margin-top:2px;flex-shrink:0;"></i>' +
+            '<span style="color:' + textColor + ';font-size:0.82rem;">' + text + '</span>';
+    }
+
+    function resetBtn() {
+        const b = document.getElementById('autoSetupBtn');
+        if (!b) return;
+        b.disabled = false;
+        b.innerHTML = '<i class="fas fa-magic"></i> Auto-Setup';
+        b.style.background = '';
+    }
+
+    try {
+        // Step 1: Get Graph token
+        addStep('Connecting to Microsoft Graph...');
+        let graphToken;
+        try {
+            graphToken = await acquireGraphToken();
+        } catch (authErr) {
+            updateLastStep('Graph authentication failed: ' + authErr.message, 'error');
+            addStep('Your App Registration may need <b>Application.ReadWrite.All</b> permission, or you may have cancelled the consent popup.', 'warn');
+            resetBtn();
+            return;
+        }
+        updateLastStep('Connected to Microsoft Graph', 'done');
+
+        // Step 2: Find App Registration by clientId
+        const clientId = getCurrentClientId();
+        if (!clientId) {
+            addStep('No client ID found. Please complete login first.', 'error');
+            resetBtn();
+            return;
+        }
+        addStep('Looking up your App Registration...');
+        const findResp = await fetch(
+            'https://graph.microsoft.com/v1.0/applications?$filter=appId eq \'' + clientId + '\'&$select=id,appId,displayName',
+            { headers: { 'Authorization': 'Bearer ' + graphToken } }
+        );
+        if (!findResp.ok) {
+            const errData = await findResp.json().catch(function() { return {}; });
+            updateLastStep('Failed to query App Registration: ' + (errData.error && errData.error.message ? errData.error.message : findResp.status), 'error');
+            resetBtn();
+            return;
+        }
+        const findData = await findResp.json();
+        if (!findData.value || findData.value.length === 0) {
+            updateLastStep('App Registration not found in your tenant. Ensure the Client ID you used to log in belongs to your Azure AD tenant.', 'error');
+            resetBtn();
+            return;
+        }
+        const appReg = findData.value[0];
+        updateLastStep('Found: "' + appReg.displayName + '"', 'done');
+
+        // Step 3: Add client secret (2-year expiry)
+        addStep('Generating client secret (expires in 2 years)...');
+        const expiry = new Date();
+        expiry.setFullYear(expiry.getFullYear() + 2);
+        const secretResp = await fetch(
+            'https://graph.microsoft.com/v1.0/applications/' + appReg.id + '/addPassword',
+            {
+                method: 'POST',
+                headers: { 'Authorization': 'Bearer ' + graphToken, 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    passwordCredential: {
+                        displayName: 'D365 App Updater \u2013 Auto Schedule',
+                        endDateTime: expiry.toISOString()
+                    }
+                })
+            }
+        );
+        if (!secretResp.ok) {
+            const errData = await secretResp.json().catch(function() { return {}; });
+            updateLastStep('Failed to create secret: ' + (errData.error && errData.error.message ? errData.error.message : secretResp.status), 'error');
+            resetBtn();
+            return;
+        }
+        const secretData = await secretResp.json();
+        const secretValue = secretData.secretText;
+        if (!secretValue) {
+            updateLastStep('Secret was created but value not returned. Please try again or create one manually.', 'error');
+            resetBtn();
+            return;
+        }
+        updateLastStep('Client secret generated (valid until ' + expiry.toLocaleDateString() + ')', 'done');
+
+        // Step 4: Fill the input and save
+        addStep('Saving schedule...');
+        const secretInput = document.getElementById('scheduleClientSecret');
+        if (secretInput) secretInput.value = secretValue;
+        await saveSchedule();
+        updateLastStep('Schedule saved!', 'done');
+
+        btn.disabled = false;
+        btn.style.background = '#16a34a';
+        btn.innerHTML = '<i class="fas fa-check-circle"></i> Setup Complete';
+
+    } catch (err) {
+        addStep('Unexpected error: ' + err.message, 'error');
+        logError('autoSetupSchedule error', err.message);
+        resetBtn();
+    }
+}
