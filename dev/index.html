@@ -169,36 +169,28 @@
         .top-credit a:hover { color: #fff; text-decoration: underline; }
 
         /* ============================================================
-           THEME TOGGLE BUTTON
+           THEME SWITCH BUTTON (inline, top-right)
            ============================================================ */
-        .theme-toggle {
-            position: fixed;
-            bottom: 1.5rem;
-            right: 1.5rem;
-            z-index: 9000;
-            width: 44px;
-            height: 44px;
-            border-radius: 50%;
-            background: var(--bg-card);
-            border: 1.5px solid var(--border);
-            box-shadow: var(--shadow-md);
-            display: flex;
+        .btn-theme-switch {
+            display: inline-flex;
             align-items: center;
-            justify-content: center;
+            padding: 0.38rem 1rem;
+            border-radius: 20px;
+            font-size: 0.82rem;
+            font-weight: 600;
+            letter-spacing: 0.01em;
             cursor: pointer;
             transition: all 0.2s ease;
+            border: 1.5px solid var(--border);
+            background: var(--bg-subtle);
             color: var(--text-primary);
-            font-size: 1rem;
+            white-space: nowrap;
         }
-        .theme-toggle:hover {
+        .btn-theme-switch:hover {
             border-color: var(--blue);
-            box-shadow: 0 0 0 3px var(--ring-focus), var(--shadow-md);
-            transform: scale(1.08);
+            background: var(--blue-badge);
+            color: var(--blue);
         }
-        .theme-toggle .icon-sun { display: none; }
-        .theme-toggle .icon-moon { display: inline; }
-        [data-theme="dark"] .theme-toggle .icon-sun { display: inline; }
-        [data-theme="dark"] .theme-toggle .icon-moon { display: none; }
 
         /* ============================================================
            AUTH PAGE LAYOUT
@@ -760,7 +752,8 @@
     <div class="container">
         <!-- Authentication Section -->
         <div id="authSection">
-            <div class="auth-page">
+            <div class="auth-page" style="position:relative;">
+                <button id="themeBtnAuth" class="btn-theme-switch" style="position:absolute;top:1.25rem;right:1.25rem;" onclick="toggleTheme()">Dark</button>
                 <div class="auth-wrapper">
                     <div class="auth-brand">
                         <div class="brand-icon">
@@ -886,6 +879,7 @@
                         <a href="admin.html" class="btn btn-outline-secondary" title="Admin Dashboard">
                             <i class="fas fa-chart-bar"></i>
                         </a>
+                        <button id="themeBtn" class="btn-theme-switch" onclick="toggleTheme()">Dark</button>
                         <button id="logoutBtn" class="btn btn-outline-danger">
                             <i class="fas fa-sign-out-alt"></i> Logout
                         </button>
@@ -1039,25 +1033,23 @@
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
     <script src="https://alcdn.msauth.net/browser/2.32.1/js/msal-browser.min.js"></script>
     <script src="app.js"></script>
-    <!-- Theme Toggle -->
-    <button class="theme-toggle" onclick="toggleTheme()" title="Toggle dark/light mode" aria-label="Toggle theme">
-        <i class="fas fa-sun icon-sun"></i>
-        <i class="fas fa-moon icon-moon"></i>
-    </button>
     <script>
-        (function() {
-            // Apply saved theme immediately (before paint)
-            var saved = localStorage.getItem('app-updater-theme');
-            var prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
-            var theme = saved || (prefersDark ? 'dark' : 'light');
-            document.documentElement.setAttribute('data-theme', theme);
-        })();
+        function updateThemeBtns(theme) {
+            var label = theme === 'dark' ? 'Light' : 'Dark';
+            ['themeBtn','themeBtnAuth'].forEach(function(id) {
+                var el = document.getElementById(id);
+                if (el) el.textContent = label;
+            });
+        }
         function toggleTheme() {
-            var current = document.documentElement.getAttribute('data-theme');
-            var next = current === 'dark' ? 'light' : 'dark';
+            var next = document.documentElement.getAttribute('data-theme') === 'dark' ? 'light' : 'dark';
             document.documentElement.setAttribute('data-theme', next);
             localStorage.setItem('app-updater-theme', next);
+            updateThemeBtns(next);
         }
+        document.addEventListener('DOMContentLoaded', function() {
+            updateThemeBtns(document.documentElement.getAttribute('data-theme'));
+        });
     </script>
 </body>
 </html>
