@@ -3593,7 +3593,7 @@ async function autoSetupSchedule() {
                     body: JSON.stringify({
                         displayName: 'D365 App Updater - Schedule',
                         signInAudience: 'AzureADMyOrg',
-                        web: { redirectUris: ['https://login.microsoftonline.com/common/oauth2/nativeclient'] }
+                        web: { redirectUris: [window.location.origin + window.location.pathname] }
                     })
                 }
             );
@@ -3655,7 +3655,7 @@ async function autoSetupSchedule() {
         // If a new app was created, show admin consent note
         if (newAppCreated) {
             const tenantId = getCurrentTenantId() || 'common';
-            const consentRedirectUri = 'https://login.microsoftonline.com/common/oauth2/nativeclient';
+            const consentRedirectUri = window.location.origin + window.location.pathname;
             const consentUrl = 'https://login.microsoftonline.com/' + tenantId + '/adminconsent?client_id=' + appReg.appId + '&redirect_uri=' + encodeURIComponent(consentRedirectUri);
             addStep(
                 '<b>One more step:</b> An admin must grant Power Platform permissions to this new app. ' +
