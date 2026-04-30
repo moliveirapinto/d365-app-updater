@@ -584,6 +584,20 @@
             transition: background 0.15s;
         }
         .toggle-secret-btn:hover { background: var(--bg-subtle2); }
+        .auto-setup-btn {
+            display: inline-flex; align-items: center; gap: 0.5rem;
+            background: #16a34a; color: #fff; border: none;
+            padding: 0.5rem 1.25rem; border-radius: var(--radius-sm);
+            font-size: 0.875rem; font-weight: 600; cursor: pointer;
+            transition: background 0.15s, transform 0.1s; white-space: nowrap;
+        }
+        .auto-setup-btn:hover { background: #15803d; }
+        .auto-setup-btn:active { transform: scale(0.98); }
+        .auto-setup-btn:disabled { background: var(--text-muted); cursor: not-allowed; }
+        .auto-setup-progress {
+            background: var(--bg-subtle); border: 1px solid var(--border);
+            border-radius: var(--radius-sm); padding: 0.75rem 1rem; margin-bottom: 0.5rem;
+        }
 
         /* ============================================================
            BULK ACTIONS BAR
@@ -926,16 +940,35 @@
                     </div>
                     <div class="schedule-details" id="scheduleDetails" style="display: none;">
                         <div class="schedule-credentials">
-                            <p style="font-size: 0.8rem; color: #6b7280; margin-bottom: 10px;">
-                                <i class="fas fa-info-circle"></i> Enter a Client Secret for your App Registration. 
-                                <a href="#" onclick="showCredentialsHelp(); return false;" style="color: #4f46e5;">How to create one</a>
-                            </p>
-                            <div class="schedule-input-row">
-                                <label style="font-size: 0.875rem; color: #374151;">Client Secret:</label>
-                                <input type="password" id="scheduleClientSecret" class="schedule-input" placeholder="Enter client secret">
-                                <button type="button" class="toggle-secret-btn" onclick="toggleSecretVisibility()">
-                                    <i class="fas fa-eye" id="secretToggleIcon"></i>
+                            <!-- Auto-Setup primary CTA -->
+                            <div style="display:flex;align-items:center;gap:1rem;flex-wrap:wrap;margin-bottom:0.75rem;">
+                                <button type="button" class="auto-setup-btn" id="autoSetupBtn" onclick="autoSetupSchedule()">
+                                    <i class="fas fa-magic"></i> Auto-Setup
                                 </button>
+                                <span style="font-size:0.8rem;color:var(--text-muted);">Creates a client secret on your app registration automatically — no manual steps needed.</span>
+                            </div>
+                            <!-- Progress panel -->
+                            <div id="autoSetupProgress" style="display:none;" class="auto-setup-progress">
+                                <ul id="autoSetupSteps" style="list-style:none;padding:0;margin:0;display:flex;flex-direction:column;gap:0.3rem;"></ul>
+                            </div>
+                            <!-- Divider -->
+                            <div style="display:flex;align-items:center;gap:0.75rem;margin:0.75rem 0;">
+                                <hr style="flex:1;border:none;border-top:1px solid var(--border);margin:0;">
+                                <span style="font-size:0.72rem;color:var(--text-muted);white-space:nowrap;text-transform:uppercase;letter-spacing:0.05em;">or enter manually</span>
+                                <hr style="flex:1;border:none;border-top:1px solid var(--border);margin:0;">
+                            </div>
+                            <!-- Manual entry -->
+                            <div id="manualSecretArea">
+                                <div class="schedule-input-row">
+                                    <label style="font-size:0.875rem;color:var(--text-label);">Client Secret:</label>
+                                    <input type="password" id="scheduleClientSecret" class="schedule-input" placeholder="Paste your client secret">
+                                    <button type="button" class="toggle-secret-btn" onclick="toggleSecretVisibility()">
+                                        <i class="fas fa-eye" id="secretToggleIcon"></i>
+                                    </button>
+                                </div>
+                                <p style="font-size:0.75rem;color:var(--text-muted);margin:0.25rem 0 0 0;">
+                                    <i class="fas fa-info-circle"></i> Need help? <a href="#" onclick="showCredentialsHelp(); return false;" style="color:var(--blue);">How to create a Client Secret manually</a>
+                                </p>
                             </div>
                         </div>
                         <hr style="border: none; border-top: 1px solid #e5e7eb; margin: 15px 0;">
