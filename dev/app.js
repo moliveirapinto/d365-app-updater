@@ -344,7 +344,7 @@ async function handleRedirectResponse() {
         let friendlyMessage = errorDesc;
         if (errorDesc.includes('AADSTS650057') || errorDesc.includes('not listed in the requested permissions')) {
             friendlyMessage = `<strong>Missing API Permissions</strong><br><br>
-Your Azure AD app registration is missing required permissions.<br><br>
+Your Azure AD app registration is missing required permissions.<br><br><strong>Raw error:</strong> <code style='font-size:11px;word-break:break-all'>${errorDesc}</code><br><br>
 <strong>To fix this:</strong><br>
 1. Go to <a href="https://portal.azure.com/#view/Microsoft_AAD_RegisteredApps/ApplicationsListBlade" target="_blank" rel="noopener">Azure Portal → App Registrations</a><br>
 2. Find and click on your app<br>
@@ -615,7 +615,7 @@ Your Azure AD app registration is missing required permissions.<br><br>
         
         if (e.message.includes('AADSTS650057') || e.message.includes('Invalid resource') || e.message.includes('not listed in the requested permissions')) {
             errorMessage = `<strong>Missing API Permissions</strong><br><br>
-Your Azure AD app registration is missing required permissions.<br><br>
+Your Azure AD app registration is missing required permissions.<br><br><strong>Raw error:</strong> <code style='font-size:11px;word-break:break-all'>${errorDesc}</code><br><br>
 <strong>To fix this:</strong><br>
 1. Go to <a href="https://portal.azure.com/#view/Microsoft_AAD_RegisteredApps/ApplicationsListBlade" target="_blank" rel="noopener">Azure Portal → App Registrations</a><br>
 2. Find and click on your app<br>
