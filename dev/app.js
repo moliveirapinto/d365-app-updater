@@ -1546,8 +1546,8 @@ function displayApplications() {
             stateClass = 'warning';
             stateIcon = 'arrow-circle-up';
             stateText = 'Update Available';
-            cardClass = 'app-card';
-            cardStyle = 'border-left: 4px solid #e67e22; background: #fef9f3;';
+            cardClass = 'app-card state-has-update';
+            cardStyle = '';
         } else {
             stateClass = 'secondary';
             stateIcon = 'check-circle';
