@@ -590,11 +590,11 @@
         }
         .toggle-secret-btn:hover { background: var(--bg-subtle2); }
         .auto-setup-btn {
-            display: inline-flex; align-items: center; gap: 0.5rem;
+            display: inline-flex; align-items: center; gap: 0.4rem;
             background: #16a34a; color: #fff; border: none;
-            padding: 0.5rem 1.25rem; border-radius: var(--radius-sm);
-            font-size: 0.875rem; font-weight: 600; cursor: pointer;
-            transition: background 0.15s, transform 0.1s; white-space: nowrap;
+            padding: 0.4rem 1rem; border-radius: var(--radius-sm);
+            font-size: 0.82rem; font-weight: 600; cursor: pointer;
+            transition: background 0.15s, transform 0.1s; white-space: nowrap; height: 36px;
         }
         .auto-setup-btn:hover { background: #15803d; }
         .auto-setup-btn:active { transform: scale(0.98); }
@@ -957,13 +957,7 @@
                     </div>
                     <div class="schedule-details" id="scheduleDetails" style="display: none;">
                         <div class="schedule-credentials">
-                            <!-- Auto-Setup primary CTA -->
-                            <div style="display:flex;align-items:center;gap:1rem;flex-wrap:wrap;margin-bottom:0.75rem;">
-                                <button type="button" class="auto-setup-btn" id="autoSetupBtn" onclick="autoSetupSchedule()">
-                                    <i class="fas fa-magic"></i> Auto-Setup
-                                </button>
-                                <span style="font-size:0.8rem;color:var(--text-muted);">Creates a client secret on your app registration automatically — no manual steps needed.</span>
-                            </div>
+
                             <!-- Progress panel -->
                             <div id="autoSetupProgress" style="display:none;" class="auto-setup-progress">
                                 <ul id="autoSetupSteps" style="list-style:none;padding:0;margin:0;display:flex;flex-direction:column;gap:0.3rem;"></ul>
@@ -1003,29 +997,53 @@
                             <label style="font-size: 0.875rem; color: #374151;">at</label>
                             <select id="scheduleTime" class="schedule-select">
                                 <option value="00:00">12:00 AM</option>
+                                <option value="00:30">12:30 AM</option>
                                 <option value="01:00">1:00 AM</option>
+                                <option value="01:30">1:30 AM</option>
                                 <option value="02:00">2:00 AM</option>
+                                <option value="02:30">2:30 AM</option>
                                 <option value="03:00">3:00 AM</option>
+                                <option value="03:30">3:30 AM</option>
                                 <option value="04:00">4:00 AM</option>
+                                <option value="04:30">4:30 AM</option>
                                 <option value="05:00">5:00 AM</option>
+                                <option value="05:30">5:30 AM</option>
                                 <option value="06:00">6:00 AM</option>
+                                <option value="06:30">6:30 AM</option>
                                 <option value="07:00">7:00 AM</option>
+                                <option value="07:30">7:30 AM</option>
                                 <option value="08:00">8:00 AM</option>
+                                <option value="08:30">8:30 AM</option>
                                 <option value="09:00">9:00 AM</option>
+                                <option value="09:30">9:30 AM</option>
                                 <option value="10:00">10:00 AM</option>
+                                <option value="10:30">10:30 AM</option>
                                 <option value="11:00">11:00 AM</option>
+                                <option value="11:30">11:30 AM</option>
                                 <option value="12:00">12:00 PM</option>
+                                <option value="12:30">12:30 PM</option>
                                 <option value="13:00">1:00 PM</option>
+                                <option value="13:30">1:30 PM</option>
                                 <option value="14:00">2:00 PM</option>
+                                <option value="14:30">2:30 PM</option>
                                 <option value="15:00">3:00 PM</option>
+                                <option value="15:30">3:30 PM</option>
                                 <option value="16:00">4:00 PM</option>
+                                <option value="16:30">4:30 PM</option>
                                 <option value="17:00">5:00 PM</option>
+                                <option value="17:30">5:30 PM</option>
                                 <option value="18:00">6:00 PM</option>
+                                <option value="18:30">6:30 PM</option>
                                 <option value="19:00">7:00 PM</option>
+                                <option value="19:30">7:30 PM</option>
                                 <option value="20:00">8:00 PM</option>
+                                <option value="20:30">8:30 PM</option>
                                 <option value="21:00">9:00 PM</option>
+                                <option value="21:30">9:30 PM</option>
                                 <option value="22:00">10:00 PM</option>
+                                <option value="22:30">10:30 PM</option>
                                 <option value="23:00">11:00 PM</option>
+                                <option value="23:30">11:30 PM</option>
                             </select>
                             <select id="scheduleTimezone" class="schedule-select">
                                 <option value="UTC">UTC</option>
@@ -1038,6 +1056,9 @@
                                 <option value="Asia/Tokyo">Tokyo</option>
                                 <option value="Australia/Sydney">Sydney</option>
                             </select>
+                            <button type="button" class="auto-setup-btn" id="autoSetupBtn" onclick="autoSetupSchedule()" title="Creates a client secret on your app registration automatically">
+                                <i class="fas fa-magic"></i> Auto-Setup
+                            </button>
                             <button class="schedule-save-btn" id="scheduleSaveBtn" onclick="saveSchedule()">
                                 <i class="fas fa-save"></i> Save Schedule
                             </button>
