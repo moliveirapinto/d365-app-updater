@@ -728,6 +728,15 @@
         .btn-modal-ok.btn-success-modal:hover { background: #15803d; }
         .btn-modal-ok.btn-danger-modal { background: #dc2626; }
         .btn-modal-ok.btn-danger-modal:hover { background: #b91c1c; }
+        .btn-cancel-schedule {
+            display: inline-flex; align-items: center; gap: 0.4rem;
+            background: transparent; color: var(--text-muted); border: 1.5px solid var(--border);
+            padding: 0.3rem 0.85rem; border-radius: var(--radius-sm);
+            font-size: 0.78rem; font-weight: 500; cursor: pointer;
+            transition: all 0.15s; white-space: nowrap;
+        }
+        .btn-cancel-schedule:hover { background: #fee2e2; color: #b91c1c; border-color: #fca5a5; }
+        [data-theme="dark"] .btn-cancel-schedule:hover { background: #450a0a; color: #f87171; border-color: #7f1d1d; }
 
         /* ============================================================
            MISC
@@ -1065,6 +1074,11 @@
                         </div>
                         <div class="schedule-status" id="scheduleStatus">
                             <i class="fas fa-info-circle"></i> Schedule not configured
+                        </div>
+                        <div id="cancelScheduleWrap" style="display:none; margin-top:0.5rem;">
+                            <button type="button" class="btn-cancel-schedule" id="cancelScheduleBtn" onclick="cancelSchedule()">
+                                <i class="fas fa-trash-alt"></i> Remove Schedule
+                            </button>
                         </div>
                     </div>
                 </div>
