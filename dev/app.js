@@ -2706,7 +2706,7 @@ async function saveSchedule(clientIdOverride) {
             
             const isDifferent = (selectedDay !== utcSchedule.day_of_week_utc || selectedTime !== utcSchedule.time_utc);
             const conversionInfo = isDifferent 
-                ? `<div style="background: #eff6ff; padding: 12px; border-radius: 6px; margin: 10px 0; border-left: 3px solid #3b82f6;">
+                ? `<div class="schedule-summary-box">
                     <strong>📅 Your Schedule:</strong> ${selectedDayName} at ${selectedTimeDisplay} (${selectedTimezone})<br>
                     <strong>⏰ Runs at:</strong> ${utcDayName} at ${utcTimeDisplay} UTC
                    </div>`
