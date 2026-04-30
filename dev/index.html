@@ -176,15 +176,16 @@
         .btn-theme-switch {
             display: inline-flex;
             align-items: center;
-            padding: 0.38rem 1rem;
-            border-radius: 20px;
+            gap: 0.5rem;
+            padding: 0.38rem 0.875rem;
+            border-radius: var(--radius-sm);
             font-size: 0.82rem;
-            font-weight: 600;
+            font-weight: 500;
             letter-spacing: 0.01em;
             cursor: pointer;
             transition: all 0.2s ease;
             border: 1.5px solid var(--border);
-            background: var(--bg-subtle);
+            background: var(--bg-card);
             color: var(--text-primary);
             white-space: nowrap;
         }
@@ -192,6 +193,24 @@
             border-color: var(--blue);
             background: var(--blue-badge);
             color: var(--blue);
+        }
+        .btn-sign-out {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.5rem;
+            padding: 0.38rem 0.875rem;
+            border-radius: var(--radius-sm);
+            font-size: 0.8rem;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            border: none;
+            background: #dc2626;
+            color: #ffffff;
+            white-space: nowrap;
+        }
+        .btn-sign-out:hover {
+            background: #b91c1c;
         }
 
         /* ============================================================
@@ -763,7 +782,7 @@
         <!-- Authentication Section -->
         <div id="authSection">
             <div class="auth-page" style="position:relative;">
-                <button id="themeBtnAuth" class="btn-theme-switch" style="position:absolute;top:1.25rem;right:1.25rem;" onclick="toggleTheme()">Dark</button>
+                <button id="themeBtnAuth" class="btn-theme-switch" style="position:absolute;top:1.25rem;right:1.25rem;" onclick="toggleTheme()"><i class="fas fa-moon" style="font-size:0.85rem;"></i><span>Dark</span></button>
                 <div class="auth-wrapper">
                     <div class="auth-brand">
                         <div class="brand-icon">
@@ -889,9 +908,9 @@
                         <a href="admin.html" class="btn btn-outline-secondary" title="Admin Dashboard">
                             <i class="fas fa-chart-bar"></i>
                         </a>
-                        <button id="themeBtn" class="btn-theme-switch" onclick="toggleTheme()">Dark</button>
-                        <button id="logoutBtn" class="btn btn-outline-danger">
-                            <i class="fas fa-sign-out-alt"></i> Logout
+                        <button id="themeBtn" class="btn-theme-switch" onclick="toggleTheme()"><i class="fas fa-moon" style="font-size:0.85rem;"></i><span>Dark</span></button>
+                        <button id="logoutBtn" class="btn-sign-out">
+                            <i class="fas fa-sign-out-alt"></i><span>Sign out</span>
                         </button>
                     </div>
                 </div>
@@ -1045,10 +1064,16 @@
     <script src="app.js"></script>
     <script>
         function updateThemeBtns(theme) {
-            var label = theme === 'dark' ? 'Light' : 'Dark';
+            var isDark = theme === 'dark';
+            var icon = isDark ? 'fa-sun' : 'fa-moon';
+            var label = isDark ? 'Light' : 'Dark';
             ['themeBtn','themeBtnAuth'].forEach(function(id) {
                 var el = document.getElementById(id);
-                if (el) el.textContent = label;
+                if (!el) return;
+                var i = el.querySelector('i');
+                var sp = el.querySelector('span');
+                if (i) { i.className = 'fas ' + icon; i.setAttribute('style','font-size:0.85rem;'); }
+                if (sp) { sp.textContent = label; }
             });
         }
         function toggleTheme() {
