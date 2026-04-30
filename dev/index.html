@@ -11,10 +11,142 @@
         * {
             font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
         }
+        :root {
+            color-scheme: light dark;
+        }
         body {
             background: #f5f6f8;
+            color: #1a1a1a;
             min-height: 100vh;
             padding: 0;
+            transition: background-color 0.2s, color 0.2s;
+        }
+        @media (prefers-color-scheme: dark) {
+            body {
+                background: #0d1117;
+                color: #e0e0e0;
+            }
+            .top-credit {
+                background: linear-gradient(90deg, #1f6feb 0%, #164b9d 100%) !important;
+            }
+            .main-card {
+                background: #161b22;
+                border-color: #30363d;
+                box-shadow: 0 1px 3px rgba(0,0,0,0.3), 0 4px 24px rgba(0,0,0,0.2);
+            }
+            .form-control {
+                background: #0d1117;
+                border-color: #30363d;
+                color: #e0e0e0;
+            }
+            .form-control:focus {
+                border-color: #1f6feb;
+                box-shadow: 0 0 0 3px rgba(31, 111, 235, 0.2);
+                background: #0d1117;
+            }
+            .form-control::placeholder {
+                color: #8b949e;
+            }
+            .form-label {
+                color: #c9d1d9;
+            }
+            .form-text {
+                color: #8b949e;
+            }
+            .auth-brand h1 {
+                color: #e0e0e0;
+            }
+            .auth-brand p {
+                color: #8b949e;
+            }
+            .info-alert {
+                background-color: #0d2a4d;
+                border-color: #1f6feb;
+                color: #58a6ff;
+            }
+            .app-card {
+                background: #161b22;
+                border-color: #30363d;
+            }
+            .divider::before, .divider::after {
+                background: #30363d;
+            }
+            .divider {
+                color: #8b949e;
+            }
+            .env-switcher-btn {
+                background: #0d1117;
+                border-color: #30363d;
+                color: #e0e0e0;
+            }
+            .env-switcher-btn .env-name {
+                color: #e0e0e0;
+            }
+            .env-dropdown {
+                background: #161b22;
+                border-color: #30363d;
+                box-shadow: 0 8px 24px rgba(0,0,0,0.5);
+            }
+            .env-search {
+                border-color: #30363d;
+            }
+            .env-search input {
+                background: #0d1117;
+                border-color: #30363d;
+                color: #e0e0e0;
+            }
+            .env-search input:focus {
+                border-color: #1f6feb;
+                box-shadow: 0 0 0 3px rgba(31, 111, 235, 0.2);
+            }
+            .modal-content {
+                background: #161b22;
+                border-color: #30363d;
+                color: #e0e0e0;
+            }
+            .modal-header {
+                border-color: #30363d;
+            }
+            .modal-body {
+                color: #e0e0e0;
+            }
+            .btn-secondary {
+                background: #21262d;
+                border-color: #30363d;
+                color: #c9d1d9;
+            }
+            .btn-secondary:hover {
+                background: #30363d;
+                border-color: #8b949e;
+            }
+            .card {
+                background: #161b22;
+                border-color: #30363d;
+            }
+            .text-muted {
+                color: #8b949e;
+            }
+            .alert {
+                background: #161b22;
+                border-color: #30363d;
+            }
+            .alert-danger {
+                background: #3d1f1f;
+                border-color: #da3633;
+                color: #f85149;
+            }
+            .loading-page {
+                background: #0d1117;
+                color: #e0e0e0;
+            }
+        }
+        @media (prefers-color-scheme: light) {
+            .app-card {
+                box-shadow: 0 1px 2px rgba(0,0,0,0.05);
+            }
+            .app-card:hover {
+                box-shadow: 0 4px 12px rgba(0,0,0,0.08);
+            }
         }
         .top-credit {
             background: linear-gradient(90deg, #0078d4 0%, #005a9e 100%);
@@ -43,14 +175,15 @@
             margin-bottom: 2rem;
         }
         .auth-brand .brand-icon {
-            width: 56px;
-            height: 56px;
-            background: #0078d4;
-            border-radius: 12px;
+            width: 64px;
+            height: 64px;
+            background: linear-gradient(135deg, #0078d4 0%, #106ebe 100%);
+            border-radius: 16px;
             display: inline-flex;
             align-items: center;
             justify-content: center;
-            margin-bottom: 1rem;
+            margin-bottom: 1.5rem;
+            box-shadow: 0 4px 12px rgba(0, 120, 212, 0.25);
         }
         .auth-brand .brand-icon i {
             color: white;
@@ -69,11 +202,12 @@
         }
         .main-card {
             background: white;
-            border-radius: 12px;
-            box-shadow: 0 1px 3px rgba(0,0,0,0.08), 0 4px 24px rgba(0,0,0,0.04);
+            border-radius: 16px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.06), 0 8px 24px rgba(0,0,0,0.08);
             border: 1px solid #e5e7eb;
-            padding: 2rem;
+            padding: 2.5rem;
             margin-bottom: 2rem;
+            transition: box-shadow 0.2s ease;
         }
         .auth-section {
             max-width: 460px;
@@ -109,21 +243,25 @@
             margin-top: 0.375rem;
         }
         .btn-connect {
-            background: #0078d4;
+            background: linear-gradient(90deg, #0078d4 0%, #106ebe 100%);
             border: none;
             color: white;
             font-weight: 600;
             font-size: 0.95rem;
-            padding: 0.75rem 1.5rem;
-            border-radius: 8px;
-            transition: background 0.15s;
+            padding: 0.875rem 2rem;
+            border-radius: 10px;
+            transition: all 0.2s ease;
+            box-shadow: 0 2px 8px rgba(0, 120, 212, 0.25);
         }
         .btn-connect:hover {
-            background: #106ebe;
+            background: linear-gradient(90deg, #106ebe 0%, #0055a4 100%);
             color: white;
+            box-shadow: 0 4px 12px rgba(0, 120, 212, 0.35);
+            transform: translateY(-2px);
         }
         .btn-connect:active {
-            background: #005a9e;
+            background: linear-gradient(90deg, #0055a4 0%, #003d79 100%);
+            transform: translateY(0);
         }
         .btn-primary {
             background: #0078d4;
@@ -162,11 +300,17 @@
         }
         .app-card {
             border: 1px solid #e5e7eb;
-            border-radius: 10px;
+            border-radius: 12px;
             padding: 1.5rem;
-            margin-bottom: 0.75rem;
-            transition: all 0.2s;
+            margin-bottom: 1rem;
+            transition: all 0.2s ease;
             background: white;
+            cursor: pointer;
+        }
+        .app-card:hover {
+            border-color: #0078d4;
+            box-shadow: 0 8px 16px rgba(0, 120, 212, 0.12);
+            transform: translateY(-1px);
         }
 
         /* Environment switcher */
@@ -968,28 +1112,6 @@
             </div>
         </div>
     </div>
-
-    <!-- Debug Log Panel -->
-    <div id="logPanel" style="display:none; position:fixed; bottom:0; left:0; right:0; height:250px; 
-        background:#1e1e1e; border-top:2px solid #0078d4; z-index:10000; font-family:monospace; font-size:12px;">
-        <div style="display:flex; justify-content:space-between; align-items:center; padding:8px 12px; background:#252526; border-bottom:1px solid #333;">
-            <span style="color:#ccc; font-weight:bold;"><i class="fas fa-terminal"></i> Debug Logs</span>
-            <div>
-                <button onclick="clearLogs()" style="background:#444; color:#fff; border:none; padding:4px 10px; border-radius:4px; margin-right:5px; cursor:pointer;">Clear</button>
-                <button onclick="exportLogs()" style="background:#444; color:#fff; border:none; padding:4px 10px; border-radius:4px; margin-right:5px; cursor:pointer;">Export</button>
-                <button onclick="toggleLogPanel()" style="background:#d32f2f; color:#fff; border:none; padding:4px 10px; border-radius:4px; cursor:pointer;">Close</button>
-            </div>
-        </div>
-        <div id="logContent" style="height:calc(100% - 40px); overflow-y:auto; padding:8px 12px; color:#eee;"></div>
-    </div>
-    
-    <!-- Floating Log Toggle Button -->
-    <button id="logToggleBtn" onclick="toggleLogPanel()" 
-        style="position:fixed; bottom:15px; right:15px; width:48px; height:48px; border-radius:50%; 
-        background:#0078d4; color:white; border:none; cursor:pointer; z-index:9999; 
-        box-shadow:0 2px 8px rgba(0,0,0,0.3); font-size:18px;" title="Toggle Debug Logs">
-        <i class="fas fa-bug"></i>
-    </button>
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
     <script src="https://alcdn.msauth.net/browser/2.32.1/js/msal-browser.min.js"></script>
