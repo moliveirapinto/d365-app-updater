@@ -2,7 +2,7 @@ name: Scheduled App Updates
 
 on:
   schedule:
-    - cron: '0 * * * *'
+    - cron: '0,30 * * * *'
   workflow_dispatch:
     inputs:
       force_all:
@@ -107,7 +107,12 @@ jobs:
 
             # day_of_week and time_utc are stored as UTC values, so compare in UTC
             NOW_DAY=$(date -u +%w)
-            NOW_HOUR=$(date -u +%H):00
+            RAW_MIN=$((10#$(date -u +%M)))
+            if [ $RAW_MIN -lt 30 ]; then
+              NOW_HOUR="$(date -u +%H):00"
+            else
+              NOW_HOUR="$(date -u +%H):30"
+            fi
             NOW_FULL=$(date -u '+%A %H:%M UTC')
             echo "  Now (UTC): day=$NOW_DAY time=$NOW_HOUR ($NOW_FULL)"
 
