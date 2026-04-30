@@ -424,6 +424,11 @@
         /* ============================================================
            BADGES
            ============================================================ */
+        /* Fix Bootstrap bg-warning contrast (yellow bg needs dark text) */
+        .badge.bg-warning { color: #7c2d00 !important; background-color: #f59e0b !important; }
+        [data-theme="dark"] .badge.bg-warning { color: #1c1400 !important; background-color: #f59e0b !important; }
+        /* Fix Bootstrap bg-warning contrast (yellow bg needs dark text) */
+        .badge.bg-warning { color: #78350f !important; background-color: #f59e0b !important; font-weight: 600 !important; }
         .badge-update {
             background: #16a34a; color: #fff;
             padding: 0.35rem 0.9rem; border-radius: 20px; font-size: 0.8rem; font-weight: 500;
