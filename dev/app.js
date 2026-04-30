@@ -118,7 +118,7 @@ function createMsalConfig(tenantId, clientId) {
         },
         cache: {
             cacheLocation: 'localStorage',
-            storeAuthStateInCookie: false,
+            storeAuthStateInCookie: true,
         },
     };
 }
@@ -205,7 +205,7 @@ document.addEventListener('DOMContentLoaded', async function() {
                         authority: 'https://login.microsoftonline.com/organizations',
                         redirectUri: window.location.origin + pathDir
                     },
-                    cache: { cacheLocation: 'sessionStorage', storeAuthStateInCookie: false }
+                    cache: { cacheLocation: 'sessionStorage', storeAuthStateInCookie: true }
                 };
                 const wizardMsal = new msal.PublicClientApplication(wizardMsalConfig);
                 await wizardMsal.initialize();
