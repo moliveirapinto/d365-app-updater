@@ -34,6 +34,7 @@
             --bg-list-alt:    #f9fafb;
             --bg-banner-dev:  #fff3cd;
             --bg-app-updating: #f0f7ff;
+            --bg-app-update:   #fffbeb;
             --bg-app-failed:   #fff5f5;
             --bg-error-detail: #fef2f2;
             --bg-modal:        #ffffff;
@@ -91,6 +92,7 @@
             --bg-list-alt:    #1c2128;
             --bg-banner-dev:  #1c1600;
             --bg-app-updating: #0d2137;
+            --bg-app-update:   #1c1600;
             --bg-app-failed:   #1e0d0d;
             --bg-error-detail: #2d0d0d;
             --bg-modal:        #161b22;
@@ -383,6 +385,14 @@
         .app-card.state-failed {
             border-left: 4px solid #ef4444;
             background: var(--bg-app-failed);
+        }
+        .app-card.state-has-update {
+            border-left: 4px solid #e67e22;
+            background: var(--bg-app-update);
+        }
+        .app-card.state-has-update:hover {
+            border-left: 4px solid #f39c12;
+            background: var(--bg-app-update);
         }
         .app-name { font-weight: 600; font-size: 0.95rem; color: var(--text-app-name); }
         .app-version { color: var(--text-muted); font-size: 0.85rem; }
