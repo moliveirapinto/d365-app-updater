@@ -2354,6 +2354,8 @@ function updateScheduleStatus(schedule) {
         (showUtcInfo ? `<br><small style="color: #6b7280;">Runs at: ${utcDayName} ${utcTimeDisplay} UTC</small>` : '') +
         `<br><small>Last run: ${lastRun}</small>`;
     statusEl.className = 'schedule-status active';
+    const cancelWrap = document.getElementById('cancelScheduleWrap');
+    if (cancelWrap) cancelWrap.style.display = '';
 }
 
 function formatTimeDisplay(time24) {
@@ -2778,6 +2780,60 @@ async function saveSchedule(clientIdOverride) {
     } finally {
         saveBtn.disabled = false;
         saveBtn.innerHTML = originalText;
+    }
+}
+
+async function cancelSchedule() {
+    const confirmed = await showModal({
+        title: 'Remove Schedule',
+        body: '<p>Are you sure you want to remove the auto-update schedule?</p><p>This will delete your saved schedule and client secret. The app will no longer update automatically.</p>',
+        type: 'danger',
+        confirmLabel: 'Remove Schedule',
+        cancelLabel: 'Keep It'
+    });
+    if (!confirmed) return;
+
+    const cfg = getSupabaseConfig();
+    if (!cfg) return;
+    const userEmail = getCurrentUserEmail();
+    const envId = environmentId || '';
+    if (!userEmail || !envId) return;
+
+    const btn = document.getElementById('cancelScheduleBtn');
+    if (btn) { btn.disabled = true; btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Removing...'; }
+
+    try {
+        const resp = await fetch(
+            cfg.url + '/rest/v1/update_schedules?user_email=eq.' + encodeURIComponent(userEmail) + '&environment_id=eq.' + encodeURIComponent(envId),
+            {
+                method: 'DELETE',
+                headers: { 'apikey': cfg.key, 'Authorization': 'Bearer ' + cfg.key }
+            }
+        );
+        if (resp.ok) {
+            scheduleLoaded = false;
+            // Reset UI
+            document.getElementById('scheduleEnabled').checked = false;
+            document.getElementById('scheduleDetails').style.display = 'none';
+            document.getElementById('scheduleStatus').innerHTML = '<i class="fas fa-info-circle"></i> Schedule not configured';
+            document.getElementById('cancelScheduleWrap').style.display = 'none';
+            const autoBtn = document.getElementById('autoSetupBtn');
+            if (autoBtn) {
+                autoBtn.disabled = false;
+                autoBtn.innerHTML = '<i class="fas fa-magic"></i> Auto-Setup';
+                autoBtn.style.background = '';
+                autoBtn.style.cursor = '';
+                autoBtn.title = '';
+            }
+            const secretInput = document.getElementById('scheduleClientSecret');
+            if (secretInput) { secretInput.placeholder = 'Enter client secret'; secretInput.value = ''; }
+        } else {
+            showError('Failed to remove schedule. Please try again.');
+            if (btn) { btn.disabled = false; btn.innerHTML = '<i class="fas fa-trash-alt"></i> Remove Schedule'; }
+        }
+    } catch (err) {
+        showError('Error removing schedule: ' + err.message);
+        if (btn) { btn.disabled = false; btn.innerHTML = '<i class="fas fa-trash-alt"></i> Remove Schedule'; }
     }
 }
 
