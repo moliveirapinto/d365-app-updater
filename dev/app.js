@@ -2215,12 +2215,13 @@ function toggleSecretVisibility() {
 
 function showCredentialsHelp() {
     const clientId = getCurrentClientId();
-    const clientIdDisplay = clientId ? `<code style="background:#e5e7eb; padding: 2px 6px; border-radius: 4px;">${clientId}</code>` : '(from your login)';
+    const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+    const clientIdDisplay = clientId ? `<code style="${isDark ? 'background:#21262d; color:#e6edf3;' : 'background:#e5e7eb;'} padding: 2px 6px; border-radius: 4px;">${clientId}</code>` : '(from your login)';
     
     showModal({
         title: 'How to Create a Client Secret',
         body: `<div style="text-align: left; font-size: 0.9rem;">
-<p style="background: #f0f9ff; padding: 10px; border-radius: 6px; border-left: 3px solid #0078d4;">
+<p style="${isDark ? 'background: #0d2137; border-left: 3px solid #388bfd;' : 'background: #f0f9ff; border-left: 3px solid #0078d4;'} padding: 10px; border-radius: 6px;">
 <strong>Your Client ID:</strong> ${clientIdDisplay}<br>
 <small>This is the App Registration you used to log in.</small>
 </p>
@@ -2237,14 +2238,14 @@ Find and click on your app (the one with the Client ID above)</p>
 - Click <strong>"Add"</strong></p>
 
 <p><strong>Step 3: Copy the Secret Value</strong><br>
-<span style="color: #dc2626;">⚠️ IMPORTANT: Copy the <strong>Value</strong> key (not the Secret ID) immediately!</span><br>
+<span style="color: ${isDark ? '#f87171' : '#dc2626'};">⚠️ IMPORTANT: Copy the <strong>Value</strong> key (not the Secret ID) immediately!</span><br>
 It will only be shown once. If you lose it, you'll need to create a new one.</p>
 
 <p><strong>Step 4: Paste Here and Save</strong><br>
 Paste the secret value in the field above and click "Save Schedule"</p>
 
 <hr style="margin: 15px 0;">
-<p style="color: #059669;"><strong>✅ What happens automatically:</strong><br>
+<p style="color: ${isDark ? '#34d399' : '#059669'};"><strong>✅ What happens automatically:</strong><br>
 - API permissions are added to your app<br>
 - Admin consent is granted<br>
 - Application User is created in Dataverse<br>
