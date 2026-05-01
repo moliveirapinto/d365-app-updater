@@ -106,46 +106,59 @@ jobs:
             echo "  Org:  $ORG"
             echo "  Want: day=$DAY time=$TIME tz=$TZ_NAME"
 
-            # day_of_week and time_utc are stored as UTC values, so compare in UTC
-            NOW_DAY=$(date -u +%w)
-            NOW_H_RAW=$(date -u +%H)
-            NOW_M_RAW=$(date -u +%M)
-            NOW_H=$((10#$NOW_H_RAW))
-            NOW_M=$((10#$NOW_M_RAW))
-            NOW_MINS=$(( NOW_H * 60 + NOW_M ))
-            NOW_FULL=$(date -u '+%A %H:%M UTC')
-            echo "  Now (UTC): day=$NOW_DAY ${NOW_H_RAW}:${NOW_M_RAW} ($NOW_FULL)"
+            # Missed-run catch-up algorithm:
+            # On each cron firing, check whether the most recent occurrence of
+            # (day_of_week, time_utc) has already been run. If not, run it.
+            # This makes the workflow tolerant to GitHub Actions cron skipping
+            # entire trigger windows (which happens regularly under load).
 
-            # Parse schedule target time into minutes-since-midnight
+            NOW_EPOCH=$(date -u +%s)
+            NOW_DAY_NUM=$(date -u +%w)
+            NOW_HH=$(date -u +%H)
+            NOW_MM=$(date -u +%M)
+            NOW_SECS_TODAY=$(( 10#$NOW_HH * 3600 + 10#$NOW_MM * 60 ))
+            echo "  Now (UTC): day=$NOW_DAY_NUM ${NOW_HH}:${NOW_MM} (epoch=$NOW_EPOCH)"
+
+            # Parse schedule target time
             SCHED_H=$(echo "$TIME" | cut -d: -f1)
             SCHED_M=$(echo "$TIME" | cut -d: -f2)
-            SCHED_H=$((10#$SCHED_H))
-            SCHED_M=$((10#$SCHED_M))
-            SCHED_MINS=$(( SCHED_H * 60 + SCHED_M ))
-            DIFF=$(( NOW_MINS - SCHED_MINS ))
+            SCHED_TIME_SECS=$(( 10#$SCHED_H * 3600 + 10#$SCHED_M * 60 ))
 
-            # --- Time check (skip if manually dispatched with force_all) ---
-            # Allow -5 to +65 min window to handle GitHub Actions scheduling delays
-            if [ "$FORCE_ALL" = "true" ]; then
-              echo "  >>> FORCE_ALL enabled — skipping time check <<<"
-            elif [ "$DAY" != "$NOW_DAY" ] || [ "$DIFF" -lt -5 ] || [ "$DIFF" -gt 65 ]; then
-              echo "  SKIP: time mismatch (want day=$DAY $TIME [${SCHED_MINS}m], got day=$NOW_DAY ${NOW_H_RAW}:${NOW_M_RAW} [${NOW_MINS}m], diff=${DIFF}m)"
-              echo ""; continue
-            else
-              echo "  >>> TIME MATCH (diff=${DIFF}m) — checking dedup <<<"
-              # Dedup guard: skip if already ran within the past 90 min (prevents double-run)
-              if [ -n "$LAST_RUN" ] && [ "$LAST_RUN" != "null" ]; then
-                LAST_EPOCH=$(date -d "$LAST_RUN" +%s 2>/dev/null || echo 0)
-                NOW_EPOCH=$(date -u +%s)
-                SINCE_LAST=$(( NOW_EPOCH - LAST_EPOCH ))
-                if [ "$SINCE_LAST" -lt 5400 ]; then
-                  echo "  SKIP: already ran ${SINCE_LAST}s ago (within 90-min dedup window)"
-                  echo ""; continue
-                fi
-              fi
-              echo "  >>> PROCEEDING with credentials <<<"
+            # Compute days back to most recent occurrence of (DAY, TIME)
+            DAYS_BACK=$(( (NOW_DAY_NUM - DAY + 7) % 7 ))
+            if [ "$DAYS_BACK" -eq 0 ] && [ "$NOW_SECS_TODAY" -lt "$SCHED_TIME_SECS" ]; then
+              # Today is the right day but the time hasn't come yet -> last was 7 days ago
+              DAYS_BACK=7
             fi
 
+            # Epoch of the most recent scheduled occurrence
+            START_OF_TODAY_UTC=$(date -u -d "$(date -u +%Y-%m-%d) 00:00:00 UTC" +%s)
+            LAST_OCCURRENCE=$(( START_OF_TODAY_UTC - DAYS_BACK * 86400 + SCHED_TIME_SECS ))
+            SINCE_OCCURRENCE=$(( NOW_EPOCH - LAST_OCCURRENCE ))
+            OCCURRENCE_HUMAN=$(date -u -d "@$LAST_OCCURRENCE" '+%a %Y-%m-%d %H:%M UTC')
+            echo "  Most recent scheduled occurrence: $OCCURRENCE_HUMAN ($SINCE_OCCURRENCE seconds ago)"
+
+            # Get last_run_at as epoch (0 if never)
+            LAST_EPOCH=0
+            if [ -n "$LAST_RUN" ] && [ "$LAST_RUN" != "null" ]; then
+              LAST_EPOCH=$(date -d "$LAST_RUN" +%s 2>/dev/null || echo 0)
+            fi
+
+            # --- Time check (skip if manually dispatched with force_all) ---
+            if [ "$FORCE_ALL" = "true" ]; then
+              echo "  >>> FORCE_ALL enabled - skipping time check <<<"
+            elif [ "$LAST_EPOCH" -ge "$LAST_OCCURRENCE" ]; then
+              echo "  SKIP: already ran for this occurrence (last_run=$LAST_RUN >= occurrence=$OCCURRENCE_HUMAN)"
+              echo ""; continue
+            elif [ "$SINCE_OCCURRENCE" -gt 86400 ]; then
+              echo "  SKIP: most recent occurrence was more than 24h ago - too stale to catch up"
+              echo ""; continue
+            elif [ "$NOW_EPOCH" -lt "$LAST_OCCURRENCE" ]; then
+              echo "  SKIP: scheduled time has not arrived yet"
+              echo ""; continue
+            else
+              echo "  >>> CATCH-UP: missed scheduled run, executing now <<<"
+            fi
             # --- Credentials check ---
             if [ -z "$CID" ] || [ -z "$TID" ]; then
               echo "  SKIP: missing client_id or tenant_id"
