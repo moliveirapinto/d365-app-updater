@@ -612,7 +612,11 @@ Your Azure AD app registration is missing required permissions.<br><br><strong>R
         // Provide helpful error messages for common issues
         let errorMessage = e.message;
         const resetButton = `<br><br><button onclick="window.location.reload()" style="background:#0078d4;color:white;border:none;padding:10px 20px;border-radius:6px;cursor:pointer;font-weight:600;">🔄 Start Fresh</button>`;
-        
+
+        // Transient network failure (ERR_CONNECTION_CLOSED, Failed to fetch, timeout) talking to Microsoft APIs
+        const isNetwork = e.isNetworkError || /Failed to fetch|NetworkError|ERR_CONNECTION|Network request failed/i.test(e.message);
+        const isTimeout = e.name === 'AbortError' || /aborted|timeout/i.test(e.message);
+
         if (e.message.includes('AADSTS650057') || e.message.includes('Invalid resource') || e.message.includes('not listed in the requested permissions')) {
             errorMessage = `<strong>Missing API Permissions</strong><br><br>
 Your Azure AD app registration is missing required permissions.<br><br><strong>Raw error:</strong> <code style='font-size:11px;word-break:break-all'>${errorDesc}</code><br><br>
@@ -633,6 +637,13 @@ Please verify your Tenant ID and Client ID are correct.${resetButton}`;
 The redirect URI is not configured in your app registration.<br><br>
 Add this URI to your app's redirect URIs:<br>
 <code>${window.location.origin + window.location.pathname.substring(0, window.location.pathname.lastIndexOf('/') + 1)}</code>${resetButton}`;
+        } else if (isNetwork || isTimeout) {
+            errorMessage = `<strong>Couldn't reach the Power Platform</strong><br><br>` +
+                `We tried a few times but the Microsoft service didn't respond ` +
+                `(${isTimeout ? 'request timed out' : 'connection dropped'}).<br><br>` +
+                `This is usually a temporary glitch with Microsoft's servers or your network. ` +
+                `Please try again in a moment. ` +
+                `You can check service status at <a href="https://status.powerplatform.com/" target="_blank" rel="noopener">status.powerplatform.com</a>.${resetButton}`;
         } else {
             errorMessage = `<strong>Authentication Failed</strong><br><br>${e.message}${resetButton}`;
         }
@@ -739,7 +750,7 @@ async function resolveOrgUrlToEnvironmentId(orgUrl) {
     const normalizedInput = orgUrl.toLowerCase().replace(/\/+$/, '');
     
     // List all environments and find the one whose instanceUrl matches
-    const response = await fetch('https://api.bap.microsoft.com/providers/Microsoft.BusinessAppPlatform/scopes/admin/environments?api-version=2021-04-01', {
+    const response = await fetchWithRetry('https://api.bap.microsoft.com/providers/Microsoft.BusinessAppPlatform/scopes/admin/environments?api-version=2021-04-01', {
         headers: { 'Authorization': `Bearer ${bapToken}` }
     });
     
@@ -785,7 +796,7 @@ async function getEnvironmentName() {
     const bapToken = await getBAPToken();
     
     // Get environment details by ID
-    const response = await fetch(`https://api.bap.microsoft.com/providers/Microsoft.BusinessAppPlatform/scopes/admin/environments/${environmentId}?api-version=2021-04-01`, {
+    const response = await fetchWithRetry(`https://api.bap.microsoft.com/providers/Microsoft.BusinessAppPlatform/scopes/admin/environments/${environmentId}?api-version=2021-04-01`, {
         headers: { 'Authorization': `Bearer ${bapToken}` }
     });
     
@@ -927,6 +938,47 @@ function compareVersions(v1, v2) {
         if (p1 < p2) return -1;
     }
     return 0;
+}
+
+// Helper: single-request fetch with retry on transient network/HTTP failures
+// Used for both authenticated Power Platform / BAP calls and any other API
+// that occasionally returns ERR_CONNECTION_CLOSED, 5xx, 408 or 429.
+async function fetchWithRetry(url, init = {}, opts = {}) {
+    const MAX_ATTEMPTS = opts.maxAttempts || 3;
+    const TIMEOUT_MS = opts.timeoutMs || 60000;
+    let lastErr = null;
+
+    for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), TIMEOUT_MS);
+        try {
+            const response = await fetch(url, { ...init, signal: controller.signal });
+            clearTimeout(timeoutId);
+            if ((response.status >= 500 || response.status === 408 || response.status === 429) && attempt < MAX_ATTEMPTS) {
+                const wait = 800 * attempt;
+                console.warn(`Transient HTTP ${response.status} on ${url.substring(0, 80)}, retrying in ${wait}ms (attempt ${attempt}/${MAX_ATTEMPTS})...`);
+                await new Promise(r => setTimeout(r, wait));
+                continue;
+            }
+            return response;
+        } catch (netErr) {
+            clearTimeout(timeoutId);
+            lastErr = netErr;
+            if (attempt < MAX_ATTEMPTS) {
+                const wait = 800 * attempt;
+                console.warn(`Network error on ${url.substring(0, 80)} (${netErr.message}), retrying in ${wait}ms (attempt ${attempt}/${MAX_ATTEMPTS})...`);
+                await new Promise(r => setTimeout(r, wait));
+                continue;
+            }
+            const wrapped = new Error(netErr.message);
+            wrapped.name = netErr.name;
+            wrapped.isNetworkError = true;
+            throw wrapped;
+        }
+    }
+    const wrapped = new Error(lastErr ? lastErr.message : 'Network request failed');
+    wrapped.isNetworkError = true;
+    throw wrapped;
 }
 
 // Helper: fetch all pages from a paginated Power Platform API endpoint
