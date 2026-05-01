@@ -906,8 +906,6 @@ async function switchEnvironment(envId) {
     scheduleLoaded = false;
     document.getElementById('scheduleEnabled').checked = false;
     document.getElementById('scheduleDetails').style.display = 'none';
-    document.getElementById('scheduleClientSecret').value = '';
-    document.getElementById('scheduleClientSecret').placeholder = 'Enter client secret';
     document.getElementById('scheduleStatus').innerHTML = '<i class="fas fa-info-circle"></i> Schedule not configured';
     document.getElementById('scheduleStatus').className = 'schedule-status';
     // Load schedule for the new environment
@@ -2271,55 +2269,23 @@ function handleScheduleToggle() {
 }
 
 function toggleSecretVisibility() {
-    const secretInput = document.getElementById('scheduleClientSecret');
-    const icon = document.getElementById('secretToggleIcon');
-    if (secretInput.type === 'password') {
-        secretInput.type = 'text';
-        icon.className = 'fas fa-eye-slash';
-    } else {
-        secretInput.type = 'password';
-        icon.className = 'fas fa-eye';
-    }
+    // No-op: manual secret entry has been removed in favor of Auto-Setup.
 }
 
 function showCredentialsHelp() {
-    const clientId = getCurrentClientId();
-    const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
-    const clientIdDisplay = clientId ? `<code style="${isDark ? 'background:#21262d; color:#e6edf3;' : 'background:#e5e7eb;'} padding: 2px 6px; border-radius: 4px;">${clientId}</code>` : '(from your login)';
-    
     showModal({
-        title: 'How to Create a Client Secret',
-        body: `<div style="text-align: left; font-size: 0.9rem;">
-<p style="${isDark ? 'background: #0d2137; border-left: 3px solid #388bfd;' : 'background: #f0f9ff; border-left: 3px solid #0078d4;'} padding: 10px; border-radius: 6px;">
-<strong>Your Client ID:</strong> ${clientIdDisplay}<br>
-<small>This is the App Registration you used to log in.</small>
-</p>
-
-<p><strong>Step 1: Open Your App Registration</strong><br>
-<a href="https://portal.azure.com/#blade/Microsoft_AAD_RegisteredApps/ApplicationsListBlade" target="_blank">Click here to open Azure App Registrations</a><br>
-Find and click on your app (the one with the Client ID above)</p>
-
-<p><strong>Step 2: Create a Client Secret</strong><br>
-- In the left menu, click <strong>"Certificates & secrets"</strong><br>
-- Click <strong>"+ New client secret"</strong><br>
-- Description: <code>Scheduler</code><br>
-- Expires: Choose 24 months (recommended)<br>
-- Click <strong>"Add"</strong></p>
-
-<p><strong>Step 3: Copy the Secret Value</strong><br>
-<span style="color: ${isDark ? '#f87171' : '#dc2626'};">⚠️ IMPORTANT: Copy the <strong>Value</strong> key (not the Secret ID) immediately!</span><br>
-It will only be shown once. If you lose it, you'll need to create a new one.</p>
-
-<p><strong>Step 4: Paste Here and Save</strong><br>
-Paste the secret value in the field above and click "Save Schedule"</p>
-
-<hr style="margin: 15px 0;">
-<p style="color: ${isDark ? '#34d399' : '#059669'};"><strong>✅ What happens automatically:</strong><br>
-- API permissions are added to your app<br>
-- Admin consent is granted<br>
-- Application User is created in Dataverse<br>
-- System Administrator role is assigned</p>
-</div>`,
+        title: 'How scheduled updates work',
+        body: '<div style="text-align:left;font-size:0.9rem;">' +
+              '<p>Scheduled updates use the <strong><i class="fas fa-magic"></i> Auto-Setup</strong> button — click it once and the app will:</p>' +
+              '<ul>' +
+                '<li>Find (or create) the matching App Registration in your tenant</li>' +
+                '<li>Generate a Client Secret valid for <strong>2 years</strong></li>' +
+                '<li>Add the required API permissions</li>' +
+                '<li>Create an Application User in Dataverse</li>' +
+                '<li>Assign the System Administrator role</li>' +
+              '</ul>' +
+              '<p>Manual secret entry is no longer needed.</p>' +
+              '</div>',
         type: 'info',
         confirmOnly: true
     });
@@ -2358,11 +2324,8 @@ async function loadSchedule() {
                 document.getElementById('scheduleDay').value = localSchedule.day_of_week_local;
                 document.getElementById('scheduleTime').value = localSchedule.time_local;
                 document.getElementById('scheduleTimezone').value = schedule.timezone || 'UTC';
-                // Secret is stored securely - just indicate it's set
-                const secretInput = document.getElementById('scheduleClientSecret');
+                // Secret is stored securely; reflect status on Auto-Setup button
                 if (schedule.has_secret) {
-                    secretInput.placeholder = '(secret securely saved - leave blank to keep)';
-                    secretInput.value = ''; // Clear any value
                     // Setup already done — disable Auto-Setup, only Save Schedule is needed
                     const autoBtn = document.getElementById('autoSetupBtn');
                     if (autoBtn) {
@@ -2372,19 +2335,6 @@ async function loadSchedule() {
                         autoBtn.style.background = '#6b7280';
                         autoBtn.style.cursor = 'default';
                     }
-                } else {
-                    // Check if user has a secret saved for another environment
-                    try {
-                        const otherResp = await fetch(
-                            `${cfg.url}/rest/v1/update_schedules?user_email=eq.${encodeURIComponent(userEmail)}&has_secret=eq.true&select=id`,
-                            { headers: { 'apikey': cfg.key, 'Authorization': `Bearer ${cfg.key}` } }
-                        );
-                        const others = await otherResp.json();
-                        if (others.length > 0) {
-                            secretInput.placeholder = '(will reuse secret from another environment)';
-                            secretInput.value = '';
-                        }
-                    } catch (e) { /* ignore */ }
                 }
                 document.getElementById('scheduleDetails').style.display = schedule.enabled ? 'block' : 'none';
                 updateScheduleStatus(schedule);
@@ -2569,7 +2519,7 @@ function convertFromUTC(dayOfWeekUtc, timeUtc, timezone) {
     };
 }
 
-async function saveSchedule(clientIdOverride) {
+async function saveSchedule(clientIdOverride, secretOverride) {
     const cfg = getSupabaseConfig();
     if (!cfg) {
         showError('Scheduling requires Supabase configuration.');
@@ -2611,9 +2561,8 @@ async function saveSchedule(clientIdOverride) {
         updated_at: new Date().toISOString()
     };
     
-    // Only include client_secret if user entered a new one
-    const newSecret = document.getElementById('scheduleClientSecret').value.trim();
-    // Note: secret is stored in separate secure table, not in schedule
+    // Secret only comes from the Auto-Setup flow now (passed as secretOverride)
+    const newSecret = (secretOverride || '').trim();
     
     // Track if secret is set (for validation and UI)
     if (newSecret) {
@@ -2661,7 +2610,13 @@ async function saveSchedule(clientIdOverride) {
         if (schedule.enabled && !newSecret && !hasExistingSecret) {
             saveBtn.disabled = false;
             saveBtn.innerHTML = originalText;
-            showError('Client Secret is required for scheduled updates.');
+            showModal({
+                title: 'Set up credentials first',
+                body: '<p>To enable scheduled updates, this app needs permission to run on your behalf.</p>' +
+                      '<p>Please click the <strong><i class="fas fa-magic"></i> Auto-Setup</strong> button — it will configure everything automatically (creates an app registration if needed and generates a 2-year client secret).</p>',
+                type: 'info',
+                confirmOnly: true
+            });
             return;
         }
         
@@ -2894,8 +2849,6 @@ async function cancelSchedule() {
                 autoBtn.style.cursor = '';
                 autoBtn.title = '';
             }
-            const secretInput = document.getElementById('scheduleClientSecret');
-            if (secretInput) { secretInput.placeholder = 'Enter client secret'; secretInput.value = ''; }
         } else {
             showError('Failed to remove schedule. Please try again.');
             if (btn) { btn.disabled = false; btn.innerHTML = '<i class="fas fa-trash-alt"></i> Remove Schedule'; }
@@ -3776,10 +3729,9 @@ async function autoSetupSchedule() {
 
         // Step 4: Fill the input and save
         addStep('Saving schedule...');
-        const secretInput = document.getElementById('scheduleClientSecret');
-        if (secretInput) secretInput.value = secretValue;
+        // Pass the secret directly to saveSchedule (manual input field has been removed)
         // If we created a new App Registration, pass its appId so it gets saved correctly
-        await saveSchedule(newAppCreated ? appReg.appId : undefined);
+        await saveSchedule(newAppCreated ? appReg.appId : undefined, secretValue);
         updateLastStep('Schedule saved!', 'done');
 
         btn.disabled = false;
