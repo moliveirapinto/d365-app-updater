@@ -144,7 +144,9 @@ jobs:
                 fi
               fi
               echo "  >>> PROCEEDING with credentials <<<"
-            fi# --- Credentials check ---
+            fi
+
+            # --- Credentials check ---
             if [ -z "$CID" ] || [ -z "$TID" ]; then
               echo "  SKIP: missing client_id or tenant_id"
               update_status "$ID" "no_credentials"
