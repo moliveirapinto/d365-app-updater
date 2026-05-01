@@ -98,6 +98,7 @@ jobs:
             CID=$(echo "$sched" | jq -r '.client_id // empty')
             CSEC=$(echo "$sched" | jq -r '.client_secret // empty')
             TID=$(echo "$sched" | jq -r '.tenant_id // empty')
+            LAST_RUN=$(echo "$sched" | jq -r '.last_run_at // empty')
 
             echo "========================================"
             echo "SCHEDULE #$ID"
@@ -107,26 +108,43 @@ jobs:
 
             # day_of_week and time_utc are stored as UTC values, so compare in UTC
             NOW_DAY=$(date -u +%w)
-            RAW_MIN=$((10#$(date -u +%M)))
-            if [ $RAW_MIN -lt 30 ]; then
-              NOW_HOUR="$(date -u +%H):00"
-            else
-              NOW_HOUR="$(date -u +%H):30"
-            fi
+            NOW_H_RAW=$(date -u +%H)
+            NOW_M_RAW=$(date -u +%M)
+            NOW_H=$((10#$NOW_H_RAW))
+            NOW_M=$((10#$NOW_M_RAW))
+            NOW_MINS=$(( NOW_H * 60 + NOW_M ))
             NOW_FULL=$(date -u '+%A %H:%M UTC')
-            echo "  Now (UTC): day=$NOW_DAY time=$NOW_HOUR ($NOW_FULL)"
+            echo "  Now (UTC): day=$NOW_DAY ${NOW_H_RAW}:${NOW_M_RAW} ($NOW_FULL)"
+
+            # Parse schedule target time into minutes-since-midnight
+            SCHED_H=$(echo "$TIME" | cut -d: -f1)
+            SCHED_M=$(echo "$TIME" | cut -d: -f2)
+            SCHED_H=$((10#$SCHED_H))
+            SCHED_M=$((10#$SCHED_M))
+            SCHED_MINS=$(( SCHED_H * 60 + SCHED_M ))
+            DIFF=$(( NOW_MINS - SCHED_MINS ))
 
             # --- Time check (skip if manually dispatched with force_all) ---
+            # Allow -5 to +65 min window to handle GitHub Actions scheduling delays
             if [ "$FORCE_ALL" = "true" ]; then
               echo "  >>> FORCE_ALL enabled — skipping time check <<<"
-            elif [ "$DAY" != "$NOW_DAY" ] || [ "$TIME" != "$NOW_HOUR" ]; then
-              echo "  SKIP: time mismatch (want day=$DAY $TIME, got day=$NOW_DAY $NOW_HOUR)"
+            elif [ "$DAY" != "$NOW_DAY" ] || [ "$DIFF" -lt -5 ] || [ "$DIFF" -gt 65 ]; then
+              echo "  SKIP: time mismatch (want day=$DAY $TIME [${SCHED_MINS}m], got day=$NOW_DAY ${NOW_H_RAW}:${NOW_M_RAW} [${NOW_MINS}m], diff=${DIFF}m)"
               echo ""; continue
             else
-              echo "  >>> TIME MATCH — proceeding with credentials <<<"
-            fi
-
-            # --- Credentials check ---
+              echo "  >>> TIME MATCH (diff=${DIFF}m) — checking dedup <<<"
+              # Dedup guard: skip if already ran within the past 90 min (prevents double-run)
+              if [ -n "$LAST_RUN" ] && [ "$LAST_RUN" != "null" ]; then
+                LAST_EPOCH=$(date -d "$LAST_RUN" +%s 2>/dev/null || echo 0)
+                NOW_EPOCH=$(date -u +%s)
+                SINCE_LAST=$(( NOW_EPOCH - LAST_EPOCH ))
+                if [ "$SINCE_LAST" -lt 5400 ]; then
+                  echo "  SKIP: already ran ${SINCE_LAST}s ago (within 90-min dedup window)"
+                  echo ""; continue
+                fi
+              fi
+              echo "  >>> PROCEEDING with credentials <<<"
+            fi# --- Credentials check ---
             if [ -z "$CID" ] || [ -z "$TID" ]; then
               echo "  SKIP: missing client_id or tenant_id"
               update_status "$ID" "no_credentials"
