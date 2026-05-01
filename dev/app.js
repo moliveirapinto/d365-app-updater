@@ -936,35 +936,73 @@ async function fetchAllPages(url, token) {
     let allItems = [];
     let nextUrl = url;
     let pageCount = 0;
-    
+    const MAX_ATTEMPTS = 3;
+
     while (nextUrl) {
         pageCount++;
         console.log(`Fetching page ${pageCount}: ${nextUrl.substring(0, 120)}...`);
-        
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 60000);
-        
-        const response = await fetch(nextUrl, {
-            headers: { 'Authorization': `Bearer ${token}` },
-            signal: controller.signal
-        });
-        
-        clearTimeout(timeoutId);
-        
+
+        let response = null;
+        let lastErr = null;
+        for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 60000);
+            try {
+                response = await fetch(nextUrl, {
+                    headers: { 'Authorization': `Bearer ${token}` },
+                    signal: controller.signal
+                });
+                clearTimeout(timeoutId);
+                // Retry on transient 5xx / 408 / 429
+                if (response.status >= 500 || response.status === 408 || response.status === 429) {
+                    if (attempt < MAX_ATTEMPTS) {
+                        const wait = 800 * attempt;
+                        console.warn(`Transient HTTP ${response.status} on page ${pageCount}, retrying in ${wait}ms (attempt ${attempt}/${MAX_ATTEMPTS})...`);
+                        await new Promise(r => setTimeout(r, wait));
+                        continue;
+                    }
+                }
+                break; // got a usable response
+            } catch (netErr) {
+                clearTimeout(timeoutId);
+                lastErr = netErr;
+                // TypeError 'Failed to fetch' / ERR_CONNECTION_CLOSED / network drops are transient — retry
+                if (attempt < MAX_ATTEMPTS) {
+                    const wait = 800 * attempt;
+                    console.warn(`Network error on page ${pageCount} (${netErr.message}), retrying in ${wait}ms (attempt ${attempt}/${MAX_ATTEMPTS})...`);
+                    await new Promise(r => setTimeout(r, wait));
+                    continue;
+                }
+                // Final attempt failed — re-throw with a flag so the caller can recognize it
+                const wrapped = new Error(netErr.message);
+                wrapped.name = netErr.name;
+                wrapped.isNetworkError = true;
+                throw wrapped;
+            }
+        }
+
+        if (!response) {
+            const wrapped = new Error(lastErr ? lastErr.message : 'Network request failed');
+            wrapped.isNetworkError = true;
+            throw wrapped;
+        }
+
         if (!response.ok) {
             const errorText = await response.text();
             console.error('API Error on page', pageCount, ':', response.status, errorText);
-            throw new Error('Failed to fetch apps (page ' + pageCount + '): ' + response.status);
+            const err = new Error('Failed to fetch apps (page ' + pageCount + '): ' + response.status);
+            err.status = response.status;
+            throw err;
         }
-        
+
         const data = await response.json();
         const items = data.value || [];
         allItems = allItems.concat(items);
         nextUrl = data['@odata.nextLink'] || null;
-        
+
         console.log(`Page ${pageCount}: got ${items.length} items (total so far: ${allItems.length})`);
     }
-    
+
     return allItems;
 }
 
@@ -1421,14 +1459,45 @@ async function loadApplications() {
     } catch (error) {
         hideLoading();
         console.error('Error loading applications:', error);
-        
-        let errorMsg = error.message;
-        if (error.name === 'AbortError') {
-            errorMsg = 'Request timed out. The Power Platform API took too long to respond. Please try again.';
-        }
-        
+
         const appsList = document.getElementById('appsList');
-        appsList.innerHTML = '<div class="alert alert-danger"><i class="fas fa-exclamation-triangle me-2"></i>Failed to load applications: ' + errorMsg + '</div>';
+        const isNetwork = error.isNetworkError || error.name === 'TypeError' || /Failed to fetch|NetworkError|ERR_CONNECTION/i.test(error.message || '');
+        const isTimeout = error.name === 'AbortError';
+        const isAuth = error.status === 401 || error.status === 403;
+        const isServer = typeof error.status === 'number' && error.status >= 500;
+
+        let title, body;
+        if (isTimeout) {
+            title = 'The Power Platform service is taking too long to respond';
+            body = 'This is usually a temporary issue on Microsoft\'s side. Please wait a moment and try again.';
+        } else if (isNetwork) {
+            title = 'Couldn\'t reach the Power Platform service';
+            body = 'This usually means a temporary connectivity hiccup between your browser and Microsoft\'s Power Platform API. It\'s almost always resolved by refreshing the page or trying again in a minute.<br><br>' +
+                   '<small class="text-muted">If it keeps happening, check your VPN/firewall, disable browser tracking prevention for this site, or check <a href="https://status.powerplatform.com" target="_blank" rel="noopener">status.powerplatform.com</a>.</small>';
+        } else if (isAuth) {
+            title = 'Your session has expired';
+            body = 'Please sign out and sign back in to refresh your access.';
+        } else if (isServer) {
+            title = 'The Power Platform service returned an error';
+            body = 'Microsoft\'s API responded with an error (HTTP ' + error.status + '). This is a temporary issue on their side — please try again shortly.';
+        } else {
+            title = 'Couldn\'t load your applications';
+            body = 'An unexpected issue occurred while talking to Power Platform. Please refresh and try again.<br><br><small class="text-muted">Details: ' + (error.message || 'unknown error') + '</small>';
+        }
+
+        appsList.innerHTML =
+            '<div class="alert alert-warning" style="text-align:left;">' +
+              '<div style="display:flex;align-items:flex-start;gap:0.6rem;">' +
+                '<i class="fas fa-cloud-bolt" style="font-size:1.2rem;margin-top:2px;"></i>' +
+                '<div style="flex:1;">' +
+                  '<strong>' + title + '</strong>' +
+                  '<div style="margin-top:0.4rem;font-size:0.92rem;">' + body + '</div>' +
+                  '<button type="button" class="btn btn-sm btn-primary" style="margin-top:0.75rem;" onclick="loadApplications()">' +
+                    '<i class="fas fa-rotate-right me-1"></i>Try again' +
+                  '</button>' +
+                '</div>' +
+              '</div>' +
+            '</div>';
     }
 }
 
