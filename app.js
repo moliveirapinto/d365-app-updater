@@ -118,7 +118,7 @@ function createMsalConfig(tenantId, clientId) {
         },
         cache: {
             cacheLocation: 'localStorage',
-            storeAuthStateInCookie: false,
+            storeAuthStateInCookie: true,
         },
     };
 }
@@ -151,6 +151,21 @@ document.addEventListener('DOMContentLoaded', async function() {
         // Redirect to clean URL
         window.location.href = window.location.origin + window.location.pathname;
         return;
+    }
+
+    // â•â•â• SSO from data-gen: override stale localStorage with URL params BEFORE any auth init â•â•â•
+    if (urlParams.get('autoConnect') === '1' && urlParams.get('orgUrl')) {
+        const ssoOrgUrl   = urlParams.get('orgUrl');
+        const ssoClientId = urlParams.get('clientId') || (typeof SHARED_CLIENT_ID !== 'undefined' ? SHARED_CLIENT_ID : '');
+        const ssoTenantId = urlParams.get('tenantId') || 'organizations';
+        // Clobber any stale cached creds so handleRedirectResponse() uses the right client
+        localStorage.setItem('d365_app_updater_creds', JSON.stringify({
+            orgUrl: ssoOrgUrl, tenantId: ssoTenantId, clientId: ssoClientId
+        }));
+        // Also wipe any stale MSAL cache that might trigger handleRedirectPromise on the wrong client
+        Object.keys(localStorage).forEach(k => { if (k.startsWith('msal.')) localStorage.removeItem(k); });
+        Object.keys(sessionStorage).forEach(k => { if (k.startsWith('msal.')) sessionStorage.removeItem(k); });
+        console.log('[SSO] Overrode cached creds with URL params, clientId=' + (ssoClientId||'').substring(0,8) + '...');
     }
 
     logInfo('=== APP INITIALIZATION ===');
@@ -190,7 +205,7 @@ document.addEventListener('DOMContentLoaded', async function() {
                         authority: 'https://login.microsoftonline.com/organizations',
                         redirectUri: window.location.origin + pathDir
                     },
-                    cache: { cacheLocation: 'sessionStorage', storeAuthStateInCookie: false }
+                    cache: { cacheLocation: 'sessionStorage', storeAuthStateInCookie: true }
                 };
                 const wizardMsal = new msal.PublicClientApplication(wizardMsalConfig);
                 await wizardMsal.initialize();
@@ -275,6 +290,7 @@ document.addEventListener('DOMContentLoaded', async function() {
     // Try to handle redirect response first, then fall back to auto-login
     handleRedirectResponse().then(() => {
         console.log('App initialized');
+        trySsoAutoConnect();
     });
 });
 
@@ -328,7 +344,7 @@ async function handleRedirectResponse() {
         let friendlyMessage = errorDesc;
         if (errorDesc.includes('AADSTS650057') || errorDesc.includes('not listed in the requested permissions')) {
             friendlyMessage = `<strong>Missing API Permissions</strong><br><br>
-Your Azure AD app registration is missing required permissions.<br><br>
+Your Azure AD app registration is missing required permissions.<br><br><strong>Raw error:</strong> <code style='font-size:11px;word-break:break-all'>${errorDesc}</code><br><br>
 <strong>To fix this:</strong><br>
 1. Go to <a href="https://portal.azure.com/#view/Microsoft_AAD_RegisteredApps/ApplicationsListBlade" target="_blank" rel="noopener">Azure Portal → App Registrations</a><br>
 2. Find and click on your app<br>
@@ -596,10 +612,14 @@ Your Azure AD app registration is missing required permissions.<br><br>
         // Provide helpful error messages for common issues
         let errorMessage = e.message;
         const resetButton = `<br><br><button onclick="window.location.reload()" style="background:#0078d4;color:white;border:none;padding:10px 20px;border-radius:6px;cursor:pointer;font-weight:600;">🔄 Start Fresh</button>`;
-        
+
+        // Transient network failure (ERR_CONNECTION_CLOSED, Failed to fetch, timeout) talking to Microsoft APIs
+        const isNetwork = e.isNetworkError || /Failed to fetch|NetworkError|ERR_CONNECTION|Network request failed/i.test(e.message);
+        const isTimeout = e.name === 'AbortError' || /aborted|timeout/i.test(e.message);
+
         if (e.message.includes('AADSTS650057') || e.message.includes('Invalid resource') || e.message.includes('not listed in the requested permissions')) {
             errorMessage = `<strong>Missing API Permissions</strong><br><br>
-Your Azure AD app registration is missing required permissions.<br><br>
+Your Azure AD app registration is missing required permissions.<br><br><strong>Raw error:</strong> <code style='font-size:11px;word-break:break-all'>${errorDesc}</code><br><br>
 <strong>To fix this:</strong><br>
 1. Go to <a href="https://portal.azure.com/#view/Microsoft_AAD_RegisteredApps/ApplicationsListBlade" target="_blank" rel="noopener">Azure Portal → App Registrations</a><br>
 2. Find and click on your app<br>
@@ -617,6 +637,13 @@ Please verify your Tenant ID and Client ID are correct.${resetButton}`;
 The redirect URI is not configured in your app registration.<br><br>
 Add this URI to your app's redirect URIs:<br>
 <code>${window.location.origin + window.location.pathname.substring(0, window.location.pathname.lastIndexOf('/') + 1)}</code>${resetButton}`;
+        } else if (isNetwork || isTimeout) {
+            errorMessage = `<strong>Couldn't reach the Power Platform</strong><br><br>` +
+                `We tried a few times but the Microsoft service didn't respond ` +
+                `(${isTimeout ? 'request timed out' : 'connection dropped'}).<br><br>` +
+                `This is usually a temporary glitch with Microsoft's servers or your network. ` +
+                `Please try again in a moment. ` +
+                `You can check service status at <a href="https://status.powerplatform.com/" target="_blank" rel="noopener">status.powerplatform.com</a>.${resetButton}`;
         } else {
             errorMessage = `<strong>Authentication Failed</strong><br><br>${e.message}${resetButton}`;
         }
@@ -696,9 +723,14 @@ async function handleAuthentication(event) {
         sessionStorage.setItem('d365_auth_step', 'login_redirect');
         logInfo('Set auth step to login_redirect, calling loginRedirect...');
         
-        await msalInstance.loginRedirect({
-            scopes: ['openid', 'profile']
-        });
+        // SSO: pass loginHint if companion app provided one
+        const _ssoLoginHint = sessionStorage.getItem('d365_login_hint');
+        const _loginRequest = { scopes: ['openid', 'profile'] };
+        if (_ssoLoginHint) {
+            _loginRequest.loginHint = _ssoLoginHint;
+            logInfo('SSO loginHint applied', { loginHint: _ssoLoginHint.substring(0,8) + '...' });
+        }
+        await msalInstance.loginRedirect(_loginRequest);
         
         // Execution stops here — browser navigates to Microsoft login
         return;
@@ -718,7 +750,7 @@ async function resolveOrgUrlToEnvironmentId(orgUrl) {
     const normalizedInput = orgUrl.toLowerCase().replace(/\/+$/, '');
     
     // List all environments and find the one whose instanceUrl matches
-    const response = await fetch('https://api.bap.microsoft.com/providers/Microsoft.BusinessAppPlatform/scopes/admin/environments?api-version=2021-04-01', {
+    const response = await fetchWithRetry('https://api.bap.microsoft.com/providers/Microsoft.BusinessAppPlatform/scopes/admin/environments?api-version=2021-04-01', {
         headers: { 'Authorization': `Bearer ${bapToken}` }
     });
     
@@ -764,7 +796,7 @@ async function getEnvironmentName() {
     const bapToken = await getBAPToken();
     
     // Get environment details by ID
-    const response = await fetch(`https://api.bap.microsoft.com/providers/Microsoft.BusinessAppPlatform/scopes/admin/environments/${environmentId}?api-version=2021-04-01`, {
+    const response = await fetchWithRetry(`https://api.bap.microsoft.com/providers/Microsoft.BusinessAppPlatform/scopes/admin/environments/${environmentId}?api-version=2021-04-01`, {
         headers: { 'Authorization': `Bearer ${bapToken}` }
     });
     
@@ -885,8 +917,6 @@ async function switchEnvironment(envId) {
     scheduleLoaded = false;
     document.getElementById('scheduleEnabled').checked = false;
     document.getElementById('scheduleDetails').style.display = 'none';
-    document.getElementById('scheduleClientSecret').value = '';
-    document.getElementById('scheduleClientSecret').placeholder = 'Enter client secret';
     document.getElementById('scheduleStatus').innerHTML = '<i class="fas fa-info-circle"></i> Schedule not configured';
     document.getElementById('scheduleStatus').className = 'schedule-status';
     // Load schedule for the new environment
@@ -908,6 +938,47 @@ function compareVersions(v1, v2) {
         if (p1 < p2) return -1;
     }
     return 0;
+}
+
+// Helper: single-request fetch with retry on transient network/HTTP failures
+// Used for both authenticated Power Platform / BAP calls and any other API
+// that occasionally returns ERR_CONNECTION_CLOSED, 5xx, 408 or 429.
+async function fetchWithRetry(url, init = {}, opts = {}) {
+    const MAX_ATTEMPTS = opts.maxAttempts || 3;
+    const TIMEOUT_MS = opts.timeoutMs || 60000;
+    let lastErr = null;
+
+    for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), TIMEOUT_MS);
+        try {
+            const response = await fetch(url, { ...init, signal: controller.signal });
+            clearTimeout(timeoutId);
+            if ((response.status >= 500 || response.status === 408 || response.status === 429) && attempt < MAX_ATTEMPTS) {
+                const wait = 800 * attempt;
+                console.warn(`Transient HTTP ${response.status} on ${url.substring(0, 80)}, retrying in ${wait}ms (attempt ${attempt}/${MAX_ATTEMPTS})...`);
+                await new Promise(r => setTimeout(r, wait));
+                continue;
+            }
+            return response;
+        } catch (netErr) {
+            clearTimeout(timeoutId);
+            lastErr = netErr;
+            if (attempt < MAX_ATTEMPTS) {
+                const wait = 800 * attempt;
+                console.warn(`Network error on ${url.substring(0, 80)} (${netErr.message}), retrying in ${wait}ms (attempt ${attempt}/${MAX_ATTEMPTS})...`);
+                await new Promise(r => setTimeout(r, wait));
+                continue;
+            }
+            const wrapped = new Error(netErr.message);
+            wrapped.name = netErr.name;
+            wrapped.isNetworkError = true;
+            throw wrapped;
+        }
+    }
+    const wrapped = new Error(lastErr ? lastErr.message : 'Network request failed');
+    wrapped.isNetworkError = true;
+    throw wrapped;
 }
 
 // Helper: fetch all pages from a paginated Power Platform API endpoint
@@ -932,6 +1003,7 @@ async function fetchAllPages(url, token) {
                     signal: controller.signal
                 });
                 clearTimeout(timeoutId);
+                // Retry on transient 5xx / 408 / 429
                 if (response.status >= 500 || response.status === 408 || response.status === 429) {
                     if (attempt < MAX_ATTEMPTS) {
                         const wait = 800 * attempt;
@@ -940,16 +1012,18 @@ async function fetchAllPages(url, token) {
                         continue;
                     }
                 }
-                break;
+                break; // got a usable response
             } catch (netErr) {
                 clearTimeout(timeoutId);
                 lastErr = netErr;
+                // TypeError 'Failed to fetch' / ERR_CONNECTION_CLOSED / network drops are transient — retry
                 if (attempt < MAX_ATTEMPTS) {
                     const wait = 800 * attempt;
                     console.warn(`Network error on page ${pageCount} (${netErr.message}), retrying in ${wait}ms (attempt ${attempt}/${MAX_ATTEMPTS})...`);
                     await new Promise(r => setTimeout(r, wait));
                     continue;
                 }
+                // Final attempt failed — re-throw with a flag so the caller can recognize it
                 const wrapped = new Error(netErr.message);
                 wrapped.name = netErr.name;
                 wrapped.isNetworkError = true;
@@ -1591,8 +1665,8 @@ function displayApplications() {
             stateClass = 'warning';
             stateIcon = 'arrow-circle-up';
             stateText = 'Update Available';
-            cardClass = 'app-card';
-            cardStyle = 'border-left: 4px solid #e67e22; background: #fef9f3;';
+            cardClass = 'app-card state-has-update';
+            cardStyle = '';
         } else {
             stateClass = 'secondary';
             stateIcon = 'check-circle';
@@ -2247,54 +2321,23 @@ function handleScheduleToggle() {
 }
 
 function toggleSecretVisibility() {
-    const secretInput = document.getElementById('scheduleClientSecret');
-    const icon = document.getElementById('secretToggleIcon');
-    if (secretInput.type === 'password') {
-        secretInput.type = 'text';
-        icon.className = 'fas fa-eye-slash';
-    } else {
-        secretInput.type = 'password';
-        icon.className = 'fas fa-eye';
-    }
+    // No-op: manual secret entry has been removed in favor of Auto-Setup.
 }
 
 function showCredentialsHelp() {
-    const clientId = getCurrentClientId();
-    const clientIdDisplay = clientId ? `<code style="background:#e5e7eb; padding: 2px 6px; border-radius: 4px;">${clientId}</code>` : '(from your login)';
-    
     showModal({
-        title: 'How to Create a Client Secret',
-        body: `<div style="text-align: left; font-size: 0.9rem;">
-<p style="background: #f0f9ff; padding: 10px; border-radius: 6px; border-left: 3px solid #0078d4;">
-<strong>Your Client ID:</strong> ${clientIdDisplay}<br>
-<small>This is the App Registration you used to log in.</small>
-</p>
-
-<p><strong>Step 1: Open Your App Registration</strong><br>
-<a href="https://portal.azure.com/#blade/Microsoft_AAD_RegisteredApps/ApplicationsListBlade" target="_blank">Click here to open Azure App Registrations</a><br>
-Find and click on your app (the one with the Client ID above)</p>
-
-<p><strong>Step 2: Create a Client Secret</strong><br>
-- In the left menu, click <strong>"Certificates & secrets"</strong><br>
-- Click <strong>"+ New client secret"</strong><br>
-- Description: <code>Scheduler</code><br>
-- Expires: Choose 24 months (recommended)<br>
-- Click <strong>"Add"</strong></p>
-
-<p><strong>Step 3: Copy the Secret Value</strong><br>
-<span style="color: #dc2626;">⚠️ IMPORTANT: Copy the <strong>Value</strong> key (not the Secret ID) immediately!</span><br>
-It will only be shown once. If you lose it, you'll need to create a new one.</p>
-
-<p><strong>Step 4: Paste Here and Save</strong><br>
-Paste the secret value in the field above and click "Save Schedule"</p>
-
-<hr style="margin: 15px 0;">
-<p style="color: #059669;"><strong>✅ What happens automatically:</strong><br>
-- API permissions are added to your app<br>
-- Admin consent is granted<br>
-- Application User is created in Dataverse<br>
-- System Administrator role is assigned</p>
-</div>`,
+        title: 'How scheduled updates work',
+        body: '<div style="text-align:left;font-size:0.9rem;">' +
+              '<p>Scheduled updates use the <strong><i class="fas fa-magic"></i> Auto-Setup</strong> button — click it once and the app will:</p>' +
+              '<ul>' +
+                '<li>Find (or create) the matching App Registration in your tenant</li>' +
+                '<li>Generate a Client Secret valid for <strong>2 years</strong></li>' +
+                '<li>Add the required API permissions</li>' +
+                '<li>Create an Application User in Dataverse</li>' +
+                '<li>Assign the System Administrator role</li>' +
+              '</ul>' +
+              '<p>Manual secret entry is no longer needed.</p>' +
+              '</div>',
         type: 'info',
         confirmOnly: true
     });
@@ -2333,24 +2376,17 @@ async function loadSchedule() {
                 document.getElementById('scheduleDay').value = localSchedule.day_of_week_local;
                 document.getElementById('scheduleTime').value = localSchedule.time_local;
                 document.getElementById('scheduleTimezone').value = schedule.timezone || 'UTC';
-                // Secret is stored securely - just indicate it's set
-                const secretInput = document.getElementById('scheduleClientSecret');
+                // Secret is stored securely; reflect status on Auto-Setup button
                 if (schedule.has_secret) {
-                    secretInput.placeholder = '(secret securely saved - leave blank to keep)';
-                    secretInput.value = ''; // Clear any value
-                } else {
-                    // Check if user has a secret saved for another environment
-                    try {
-                        const otherResp = await fetch(
-                            `${cfg.url}/rest/v1/update_schedules?user_email=eq.${encodeURIComponent(userEmail)}&has_secret=eq.true&select=id`,
-                            { headers: { 'apikey': cfg.key, 'Authorization': `Bearer ${cfg.key}` } }
-                        );
-                        const others = await otherResp.json();
-                        if (others.length > 0) {
-                            secretInput.placeholder = '(will reuse secret from another environment)';
-                            secretInput.value = '';
-                        }
-                    } catch (e) { /* ignore */ }
+                    // Setup already done — disable Auto-Setup, only Save Schedule is needed
+                    const autoBtn = document.getElementById('autoSetupBtn');
+                    if (autoBtn) {
+                        autoBtn.disabled = true;
+                        autoBtn.title = 'Already configured — click Auto-Setup again only if you need to reset credentials';
+                        autoBtn.innerHTML = '<i class=\'fas fa-check-circle\'></i> Configured';
+                        autoBtn.style.background = '#6b7280';
+                        autoBtn.style.cursor = 'default';
+                    }
                 }
                 document.getElementById('scheduleDetails').style.display = schedule.enabled ? 'block' : 'none';
                 updateScheduleStatus(schedule);
@@ -2389,6 +2425,8 @@ function updateScheduleStatus(schedule) {
         (showUtcInfo ? `<br><small style="color: #6b7280;">Runs at: ${utcDayName} ${utcTimeDisplay} UTC</small>` : '') +
         `<br><small>Last run: ${lastRun}</small>`;
     statusEl.className = 'schedule-status active';
+    const cancelWrap = document.getElementById('cancelScheduleWrap');
+    if (cancelWrap) cancelWrap.style.display = '';
 }
 
 function formatTimeDisplay(time24) {
@@ -2533,7 +2571,7 @@ function convertFromUTC(dayOfWeekUtc, timeUtc, timezone) {
     };
 }
 
-async function saveSchedule() {
+async function saveSchedule(clientIdOverride, secretOverride) {
     const cfg = getSupabaseConfig();
     if (!cfg) {
         showError('Scheduling requires Supabase configuration.');
@@ -2570,14 +2608,13 @@ async function saveSchedule() {
         day_of_week: utcSchedule.day_of_week_utc,  // CONVERTED to UTC
         time_utc: utcSchedule.time_utc,             // CONVERTED to UTC
         timezone: selectedTimezone,                 // Store original timezone for display
-        client_id: getCurrentClientId(),
+        client_id: clientIdOverride || getCurrentClientId(),
         tenant_id: getCurrentTenantId(),
         updated_at: new Date().toISOString()
     };
     
-    // Only include client_secret if user entered a new one
-    const newSecret = document.getElementById('scheduleClientSecret').value.trim();
-    // Note: secret is stored in separate secure table, not in schedule
+    // Secret only comes from the Auto-Setup flow now (passed as secretOverride)
+    const newSecret = (secretOverride || '').trim();
     
     // Track if secret is set (for validation and UI)
     if (newSecret) {
@@ -2625,7 +2662,13 @@ async function saveSchedule() {
         if (schedule.enabled && !newSecret && !hasExistingSecret) {
             saveBtn.disabled = false;
             saveBtn.innerHTML = originalText;
-            showError('Client Secret is required for scheduled updates.');
+            showModal({
+                title: 'Set up credentials first',
+                body: '<p>To enable scheduled updates, this app needs permission to run on your behalf.</p>' +
+                      '<p>Please click the <strong><i class="fas fa-magic"></i> Auto-Setup</strong> button — it will configure everything automatically (creates an app registration if needed and generates a 2-year client secret).</p>',
+                type: 'info',
+                confirmOnly: true
+            });
             return;
         }
         
@@ -2750,7 +2793,7 @@ async function saveSchedule() {
             
             const isDifferent = (selectedDay !== utcSchedule.day_of_week_utc || selectedTime !== utcSchedule.time_utc);
             const conversionInfo = isDifferent 
-                ? `<div style="background: #eff6ff; padding: 12px; border-radius: 6px; margin: 10px 0; border-left: 3px solid #3b82f6;">
+                ? `<div class="schedule-summary-box">
                     <strong>📅 Your Schedule:</strong> ${selectedDayName} at ${selectedTimeDisplay} (${selectedTimezone})<br>
                     <strong>⏰ Runs at:</strong> ${utcDayName} at ${utcTimeDisplay} UTC
                    </div>`
@@ -2813,6 +2856,58 @@ async function saveSchedule() {
     } finally {
         saveBtn.disabled = false;
         saveBtn.innerHTML = originalText;
+    }
+}
+
+async function cancelSchedule() {
+    const confirmed = await showModal({
+        title: 'Remove Schedule',
+        body: '<p>Are you sure you want to remove the auto-update schedule?</p><p>This will delete your saved schedule and client secret. The app will no longer update automatically.</p>',
+        type: 'danger',
+        confirmLabel: 'Remove Schedule',
+        cancelLabel: 'Keep It'
+    });
+    if (!confirmed) return;
+
+    const cfg = getSupabaseConfig();
+    if (!cfg) return;
+    const userEmail = getCurrentUserEmail();
+    const envId = environmentId || '';
+    if (!userEmail || !envId) return;
+
+    const btn = document.getElementById('cancelScheduleBtn');
+    if (btn) { btn.disabled = true; btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Removing...'; }
+
+    try {
+        const resp = await fetch(
+            cfg.url + '/rest/v1/update_schedules?user_email=eq.' + encodeURIComponent(userEmail) + '&environment_id=eq.' + encodeURIComponent(envId),
+            {
+                method: 'DELETE',
+                headers: { 'apikey': cfg.key, 'Authorization': 'Bearer ' + cfg.key }
+            }
+        );
+        if (resp.ok) {
+            scheduleLoaded = false;
+            // Reset UI
+            document.getElementById('scheduleEnabled').checked = false;
+            document.getElementById('scheduleDetails').style.display = 'none';
+            document.getElementById('scheduleStatus').innerHTML = '<i class="fas fa-info-circle"></i> Schedule not configured';
+            document.getElementById('cancelScheduleWrap').style.display = 'none';
+            const autoBtn = document.getElementById('autoSetupBtn');
+            if (autoBtn) {
+                autoBtn.disabled = false;
+                autoBtn.innerHTML = '<i class="fas fa-magic"></i> Auto-Setup';
+                autoBtn.style.background = '';
+                autoBtn.style.cursor = '';
+                autoBtn.title = '';
+            }
+        } else {
+            showError('Failed to remove schedule. Please try again.');
+            if (btn) { btn.disabled = false; btn.innerHTML = '<i class="fas fa-trash-alt"></i> Remove Schedule'; }
+        }
+    } catch (err) {
+        showError('Error removing schedule: ' + err.message);
+        if (btn) { btn.disabled = false; btn.innerHTML = '<i class="fas fa-trash-alt"></i> Remove Schedule'; }
     }
 }
 
@@ -3474,3 +3569,243 @@ function showAlert(title, message, type) {
 window.updateSingleApp = updateSingleApp;
 window.installApp = installApp;
 window.closeModal = closeModal;
+
+// â•â•â• SSO AUTO-CONNECT FROM COMPANION APPS (e.g. D365 DataGen) â•â•â•
+// Shared multi-tenant Entra app registration. Users still see the same
+// one-time consent prompt on first use in their tenant; after that, no
+// app registration or client ID is ever needed.
+const SHARED_CLIENT_ID = 'c4ff0dc1-4cf0-44e1-8a26-7d265772484a';
+
+function trySsoAutoConnect() {
+    if (msalInstance) { logInfo('SSO skip: already authenticated'); return; }
+    const params = new URLSearchParams(window.location.search);
+    const paramOrgUrl    = params.get('orgUrl');
+    const paramClientId  = params.get('clientId') || SHARED_CLIENT_ID;
+    const paramLoginHint = params.get('loginHint');
+    const paramAutoConnect = params.get('autoConnect') === '1';
+
+    if (!paramAutoConnect || !paramOrgUrl) return;
+
+    logInfo('SSO auto-connect detected', {
+        orgUrl: paramOrgUrl,
+        clientId: paramClientId.substring(0,8) + '...',
+        hasLoginHint: !!paramLoginHint
+    });
+
+    const orgUrlEl   = document.getElementById('orgUrl');
+    const clientIdEl = document.getElementById('clientId');
+    if (orgUrlEl)   orgUrlEl.value   = paramOrgUrl;
+    if (clientIdEl) clientIdEl.value = paramClientId;
+    if (paramLoginHint) {
+        sessionStorage.setItem('d365_login_hint', paramLoginHint);
+    }
+    // Strip URL params so a reload doesn't loop
+    const cleanUrl = window.location.origin + window.location.pathname;
+    window.history.replaceState({}, '', cleanUrl);
+
+    // Hide the form chrome so the user sees a clean "Authenticating..."
+    const authCard = document.querySelector('#authForm')?.closest('.card');
+    if (authCard) authCard.style.display = 'none';
+
+    showLoading('Signing you in...', 'Connecting to Microsoft via SSO');
+
+    // Submit the form programmatically â€” handleAuthentication will pick up loginHint from sessionStorage
+    const authForm = document.getElementById('authForm');
+    if (authForm) {
+        logInfo('Auto-submitting auth form');
+        authForm.requestSubmit ? authForm.requestSubmit() :
+            authForm.dispatchEvent(new Event('submit', { cancelable: true, bubbles: true }));
+    }
+}
+// â•â•â• END SSO BLOCK â•â•â•
+
+// ═══════════════════════════════════════════════════════════════════════════
+// AUTO-SETUP SCHEDULE: Creates client secret via Graph API automatically
+// ═══════════════════════════════════════════════════════════════════════════
+
+async function acquireGraphToken() {
+    if (!msalInstance) throw new Error('Not authenticated. Please log in first.');
+    const accounts = msalInstance.getAllAccounts();
+    if (!accounts.length) throw new Error('No active session. Please log in.');
+    const scopes = ['https://graph.microsoft.com/Application.ReadWrite.All'];
+    try {
+        const result = await msalInstance.acquireTokenSilent({ scopes, account: accounts[0] });
+        return result.accessToken;
+    } catch (silentErr) {
+        logWarn('Silent Graph token failed, trying popup', silentErr.message);
+        const result = await msalInstance.acquireTokenPopup({ scopes, account: accounts[0] });
+        return result.accessToken;
+    }
+}
+
+async function autoSetupSchedule() {
+    const btn = document.getElementById('autoSetupBtn');
+    const progress = document.getElementById('autoSetupProgress');
+    const stepsList = document.getElementById('autoSetupSteps');
+
+    btn.disabled = true;
+    btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Setting up...';
+    progress.style.display = 'block';
+    stepsList.innerHTML = '';
+
+    function addStep(text, status) {
+        const st = status || 'running';
+        const iconMap = { running: 'fas fa-spinner fa-spin', done: 'fas fa-check-circle', error: 'fas fa-times-circle', warn: 'fas fa-exclamation-circle' };
+        const colorMap = { running: 'var(--text-muted)', done: '#16a34a', error: '#dc2626', warn: '#d97706' };
+        const textColor = st === 'error' ? '#dc2626' : st === 'warn' ? '#d97706' : 'var(--text-primary)';
+        const li = document.createElement('li');
+        li.style.cssText = 'display:flex;align-items:flex-start;gap:0.6rem;padding:0.3rem 0.4rem;border-radius:4px;';
+        li.innerHTML = '<i class="' + iconMap[st] + '" style="font-size:0.8rem;color:' + colorMap[st] + ';width:14px;margin-top:2px;flex-shrink:0;"></i>' +
+            '<span style="color:' + textColor + ';font-size:0.82rem;">' + text + '</span>';
+        stepsList.appendChild(li);
+        return li;
+    }
+
+    function updateLastStep(text, status) {
+        const all = stepsList.querySelectorAll('li');
+        if (!all.length) return;
+        const last = all[all.length - 1];
+        const iconMap = { running: 'fas fa-spinner fa-spin', done: 'fas fa-check-circle', error: 'fas fa-times-circle', warn: 'fas fa-exclamation-circle' };
+        const colorMap = { running: 'var(--text-muted)', done: '#16a34a', error: '#dc2626', warn: '#d97706' };
+        const textColor = status === 'error' ? '#dc2626' : status === 'warn' ? '#d97706' : 'var(--text-primary)';
+        last.innerHTML = '<i class="' + iconMap[status] + '" style="font-size:0.8rem;color:' + colorMap[status] + ';width:14px;margin-top:2px;flex-shrink:0;"></i>' +
+            '<span style="color:' + textColor + ';font-size:0.82rem;">' + text + '</span>';
+    }
+
+    function resetBtn() {
+        const b = document.getElementById('autoSetupBtn');
+        if (!b) return;
+        b.disabled = false;
+        b.innerHTML = '<i class="fas fa-magic"></i> Auto-Setup';
+        b.style.background = '';
+    }
+
+    try {
+        // Step 1: Get Graph token
+        addStep('Connecting to Microsoft Graph...');
+        let graphToken;
+        try {
+            graphToken = await acquireGraphToken();
+        } catch (authErr) {
+            updateLastStep('Graph authentication failed: ' + authErr.message, 'error');
+            addStep('Your App Registration may need <b>Application.ReadWrite.All</b> permission, or you may have cancelled the consent popup.', 'warn');
+            resetBtn();
+            return;
+        }
+        updateLastStep('Connected to Microsoft Graph', 'done');
+
+        // Step 2: Find App Registration by clientId
+        const clientId = getCurrentClientId();
+        if (!clientId) {
+            addStep('No client ID found. Please complete login first.', 'error');
+            resetBtn();
+            return;
+        }
+        addStep('Looking up your App Registration...');
+        const findResp = await fetch(
+            'https://graph.microsoft.com/v1.0/applications?$filter=appId eq \'' + clientId + '\'&$select=id,appId,displayName',
+            { headers: { 'Authorization': 'Bearer ' + graphToken } }
+        );
+        if (!findResp.ok) {
+            const errData = await findResp.json().catch(function() { return {}; });
+            updateLastStep('Failed to query App Registration: ' + (errData.error && errData.error.message ? errData.error.message : findResp.status), 'error');
+            resetBtn();
+            return;
+        }
+        const findData = await findResp.json();
+        let appReg = null;
+        let newAppCreated = false;
+
+        if (findData.value && findData.value.length > 0) {
+            appReg = findData.value[0];
+            updateLastStep('Found: "' + appReg.displayName + '"', 'done');
+        } else {
+            // Not found = likely using a shared/multi-tenant client ID.
+            // Create a new App Registration in the user's own tenant.
+            updateLastStep('App not found in your tenant (using shared login). Creating a dedicated one...', 'warn');
+            addStep('Creating App Registration "D365 App Updater - Schedule"...');
+            const createResp = await fetch(
+                'https://graph.microsoft.com/v1.0/applications',
+                {
+                    method: 'POST',
+                    headers: { 'Authorization': 'Bearer ' + graphToken, 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        displayName: 'D365 App Updater - Schedule',
+                        signInAudience: 'AzureADMyOrg',
+                        web: { redirectUris: [window.location.origin + window.location.pathname] }
+                    })
+                }
+            );
+            if (!createResp.ok) {
+                const errData = await createResp.json().catch(function() { return {}; });
+                updateLastStep('Failed to create App Registration: ' + (errData.error && errData.error.message ? errData.error.message : createResp.status), 'error');
+                resetBtn();
+                return;
+            }
+            appReg = await createResp.json();
+            newAppCreated = true;
+            updateLastStep('Created "D365 App Updater - Schedule" (ID: ' + appReg.appId + ')', 'done');
+        }
+
+        // Step 3: Add client secret (2-year expiry)
+        addStep('Generating client secret (expires in 2 years)...');
+        const expiry = new Date();
+        expiry.setFullYear(expiry.getFullYear() + 2);
+        const secretResp = await fetch(
+            'https://graph.microsoft.com/v1.0/applications/' + appReg.id + '/addPassword',
+            {
+                method: 'POST',
+                headers: { 'Authorization': 'Bearer ' + graphToken, 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    passwordCredential: {
+                        displayName: 'D365 App Updater \u2013 Auto Schedule',
+                        endDateTime: expiry.toISOString()
+                    }
+                })
+            }
+        );
+        if (!secretResp.ok) {
+            const errData = await secretResp.json().catch(function() { return {}; });
+            updateLastStep('Failed to create secret: ' + (errData.error && errData.error.message ? errData.error.message : secretResp.status), 'error');
+            resetBtn();
+            return;
+        }
+        const secretData = await secretResp.json();
+        const secretValue = secretData.secretText;
+        if (!secretValue) {
+            updateLastStep('Secret was created but value not returned. Please try again or create one manually.', 'error');
+            resetBtn();
+            return;
+        }
+        updateLastStep('Client secret generated (valid until ' + expiry.toLocaleDateString() + ')', 'done');
+
+        // Step 4: Fill the input and save
+        addStep('Saving schedule...');
+        // Pass the secret directly to saveSchedule (manual input field has been removed)
+        // If we created a new App Registration, pass its appId so it gets saved correctly
+        await saveSchedule(newAppCreated ? appReg.appId : undefined, secretValue);
+        updateLastStep('Schedule saved!', 'done');
+
+        btn.disabled = false;
+        btn.style.background = '#16a34a';
+        btn.innerHTML = '<i class="fas fa-check-circle"></i> Setup Complete';
+
+        // If a new app was created, show admin consent note
+        if (newAppCreated) {
+            const tenantId = getCurrentTenantId() || 'common';
+            const consentRedirectUri = window.location.origin + window.location.pathname;
+            const consentUrl = 'https://login.microsoftonline.com/' + tenantId + '/adminconsent?client_id=' + appReg.appId + '&redirect_uri=' + encodeURIComponent(consentRedirectUri);
+            addStep(
+                '<b>One more step:</b> An admin must grant Power Platform permissions to this new app. ' +
+                '<a href="' + consentUrl + '" target="_blank" rel="noopener" style="color:var(--blue);font-weight:600;">Grant Admin Consent</a> ' +
+                '(opens Microsoft login — sign in as an admin of your tenant).',
+                'warn'
+            );
+        }
+
+    } catch (err) {
+        addStep('Unexpected error: ' + err.message, 'error');
+        logError('autoSetupSchedule error', err.message);
+        resetBtn();
+    }
+}
