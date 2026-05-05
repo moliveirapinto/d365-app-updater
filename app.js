@@ -15,10 +15,12 @@ const MAX_LOGS = 200;
 
 function appLog(level, message, data = null) {
     const timestamp = new Date().toISOString();
-    const logEntry = { timestamp, level, message, data: data ? JSON.stringify(data) : null };
-    
-    // Console output
-    const consoleMsg = `[${timestamp}] [${level}] ${message}`;
+    const dataStr = data ? (typeof data === 'string' ? data : JSON.stringify(data)) : null;
+    const logEntry = { timestamp, level, message, data: dataStr };
+
+    // Console output - inline data for ERROR/WARN so AADSTS codes etc. are visible without expanding objects
+    const inlineData = dataStr && (level === 'ERROR' || level === 'WARN') ? ' | ' + dataStr : '';
+    const consoleMsg = `[${timestamp}] [${level}] ${message}${inlineData}`;
     if (level === 'ERROR') {
         console.error(consoleMsg, data || '');
     } else if (level === 'WARN') {
@@ -315,14 +317,16 @@ async function handleRedirectResponse() {
     // Check if URL hash contains an error response from Azure AD
     const hash = window.location.hash;
     if (hash && (hash.includes('error=') || hash.includes('error_description='))) {
-        logError('Azure AD returned an error in the URL');
-        
         // Try to decode the error
         const hashParams = new URLSearchParams(hash.substring(1));
         const error = hashParams.get('error');
-        const errorDesc = decodeURIComponent(hashParams.get('error_description') || 'Unknown error');
-        
-        logError('Azure AD Error', { error, errorDesc });
+        const errorDesc = decodeURIComponent((hashParams.get('error_description') || 'Unknown error').replace(/\+/g, ' '));
+        // Extract AADSTS code (e.g. AADSTS500011) so it's visible in the log message itself
+        const aadstsMatch = errorDesc.match(/AADSTS\d+/);
+        const aadstsCode = aadstsMatch ? aadstsMatch[0] : '(no AADSTS code)';
+
+        logError(`Azure AD returned an error: ${error} / ${aadstsCode}`);
+        logError('Azure AD Error description', errorDesc);
         
         // Clear all auth state
         localStorage.removeItem('d365_app_updater_creds');
@@ -352,8 +356,36 @@ Your Azure AD app registration is missing required permissions.<br><br><strong>R
 4. Add: <strong>Power Platform API</strong> → Delegated → <code>user_impersonation</code><br>
 5. Add: <strong>Dynamics CRM</strong> → Delegated → <code>user_impersonation</code><br>
 6. Click <strong>Grant admin consent</strong>${resetButton}`;
+        } else if (errorDesc.includes('AADSTS500011') || errorDesc.includes('was not found in the tenant')) {
+            // Multi-tenant app: service principal does not exist in user's tenant yet.
+            // Being a Global Admin does NOT auto-create it - admin consent must be granted explicitly.
+            let savedForHint = null;
+            try { savedForHint = JSON.parse(localStorage.getItem('d365_app_updater_creds') || sessionStorage.getItem('d365_app_updater_creds_temp') || 'null'); } catch (e) {}
+            const tenantHint = (savedForHint && savedForHint.tenantId) ? savedForHint.tenantId : 'common';
+            const clientHint = (savedForHint && savedForHint.clientId) ? savedForHint.clientId : '';
+            const consentUrl = `https://login.microsoftonline.com/${tenantHint}/adminconsent?client_id=${encodeURIComponent(clientHint)}&redirect_uri=${encodeURIComponent(window.location.origin + window.location.pathname)}`;
+            friendlyMessage = `<strong>App not provisioned in this tenant</strong><br><br>
+This Azure AD app exists in another tenant and has not been consented to in <em>your</em> tenant yet. Being a Global Admin doesn't auto-provision it - you have to grant admin consent once.<br><br>
+<strong>Raw error:</strong> <code style='font-size:11px;word-break:break-all'>${errorDesc}</code><br><br>
+<strong>Fix (one click):</strong><br>
+<a href="${consentUrl}" target="_blank" rel="noopener" style="display:inline-block;background:#0078d4;color:white;padding:10px 16px;border-radius:6px;text-decoration:none;font-weight:600;margin-top:8px;">Grant admin consent for this tenant</a><br><br>
+After consent succeeds, return here and click <em>Start Fresh</em>.${resetButton}`;
+        } else if (errorDesc.includes('AADSTS65001') || errorDesc.includes('AADSTS90008') || errorDesc.includes('consent')) {
+            let savedForHint2 = null;
+            try { savedForHint2 = JSON.parse(localStorage.getItem('d365_app_updater_creds') || sessionStorage.getItem('d365_app_updater_creds_temp') || 'null'); } catch (e) {}
+            const tenantHint = (savedForHint2 && savedForHint2.tenantId) ? savedForHint2.tenantId : 'common';
+            const clientHint = (savedForHint2 && savedForHint2.clientId) ? savedForHint2.clientId : '';
+            const consentUrl = `https://login.microsoftonline.com/${tenantHint}/adminconsent?client_id=${encodeURIComponent(clientHint)}&redirect_uri=${encodeURIComponent(window.location.origin + window.location.pathname)}`;
+            friendlyMessage = `<strong>Admin consent required</strong><br><br>
+The app needs admin consent in your tenant. Even as a Global Admin, you must grant consent explicitly the first time.<br><br>
+<strong>Raw error:</strong> <code style='font-size:11px;word-break:break-all'>${errorDesc}</code><br><br>
+<a href="${consentUrl}" target="_blank" rel="noopener" style="display:inline-block;background:#0078d4;color:white;padding:10px 16px;border-radius:6px;text-decoration:none;font-weight:600;margin-top:8px;">Grant admin consent</a>${resetButton}`;
+        } else if (errorDesc.includes('AADSTS50020')) {
+            friendlyMessage = `<strong>Wrong account / guest user</strong><br><br>
+The account you signed in with isn't a member of the target tenant (often happens with guest accounts or when signed in with a personal Microsoft account).<br><br>
+<strong>Raw error:</strong> <code style='font-size:11px;word-break:break-all'>${errorDesc}</code>${resetButton}`;
         } else {
-            friendlyMessage = `<strong>Authentication Error</strong><br><br>${errorDesc}${resetButton}`;
+            friendlyMessage = `<strong>Authentication Error</strong> (${aadstsCode})<br><br>${errorDesc}${resetButton}`;
         }
         
         showError(friendlyMessage);
