@@ -370,16 +370,59 @@ This Azure AD app exists in another tenant and has not been consented to in <em>
 <strong>Fix (one click):</strong><br>
 <a href="${consentUrl}" target="_blank" rel="noopener" style="display:inline-block;background:#0078d4;color:white;padding:10px 16px;border-radius:6px;text-decoration:none;font-weight:600;margin-top:8px;">Grant admin consent for this tenant</a><br><br>
 After consent succeeds, return here and click <em>Start Fresh</em>.${resetButton}`;
-        } else if (errorDesc.includes('AADSTS65001') || errorDesc.includes('AADSTS90008') || errorDesc.includes('consent')) {
+        } else if (errorDesc.includes('AADSTS650052')) {
+            // Resource service principal (e.g. Power Platform Environment Service)
+            // does not exist in the user's tenant. Granting admin consent on the
+            // user's app reg WILL NOT fix this - the missing SP is a Microsoft-owned
+            // *resource* SP, not the customer app. Provision it directly.
+            // Try to extract the missing resource appId from the error description.
+            const ppEnvSvcId = '0e0bf3cc-3078-4fd4-9ef3-cb6dc0245b10'; // Power Platform Environment Service
+            const dynamicsCrmId = '00000007-0000-0000-c000-000000000000'; // Dynamics CRM
+            const ppApiId = '475226c6-020e-4fb2-8a90-7a972cbfc1d4';      // Power Platform API
+            const guidMatch = errorDesc.match(/'([0-9a-fA-F-]{36})'/);
+            const missingId = (guidMatch && guidMatch[1]) ? guidMatch[1].toLowerCase() : ppEnvSvcId;
+            const knownNames = {
+                [ppEnvSvcId]: 'Power Platform Environment Service',
+                [dynamicsCrmId]: 'Dynamics CRM',
+                [ppApiId]: 'Power Platform API'
+            };
+            const missingName = knownNames[missingId] || 'the required Microsoft service';
+
+            let savedForHint2 = null;
+            try { savedForHint2 = JSON.parse(localStorage.getItem('d365_app_updater_creds') || sessionStorage.getItem('d365_app_updater_creds_temp') || 'null'); } catch (e) {}
+            const tenantHint = (savedForHint2 && savedForHint2.tenantId) ? savedForHint2.tenantId : 'common';
+
+            // Direct provisioning: admin-consent the resource SP itself.
+            // No redirect_uri so the user sees the Microsoft consent screen and
+            // doesn't get bounced silently back to this SPA.
+            const provisionUrl = `https://login.microsoftonline.com/${tenantHint}/adminconsent?client_id=${missingId}`;
+
+            friendlyMessage = `<strong>${missingName} is not provisioned in your tenant</strong><br><br>
+This is <em>not</em> a consent problem with this app. Your tenant is missing the Microsoft-owned service principal for <strong>${missingName}</strong> (<code>${missingId}</code>). Granting admin consent on the D365 App Updater app registration will not create it.<br><br>
+<strong>Raw error:</strong> <code style='font-size:11px;word-break:break-all'>${errorDesc}</code><br><br>
+<strong>Pick one of these fixes (admin required):</strong><br><br>
+<strong>Option A - Provision via admin consent URL (one click):</strong><br>
+<a href="${provisionUrl}" target="_blank" rel="noopener" style="display:inline-block;background:#0078d4;color:white;padding:10px 16px;border-radius:6px;text-decoration:none;font-weight:600;margin-top:6px;">Provision ${missingName} in this tenant</a><br>
+<small>Opens the Microsoft consent screen. After approving, come back and click <em>Start Fresh</em>.</small><br><br>
+<strong>Option B - Provision via Azure CLI:</strong><br>
+<code style='display:block;background:#1e1e1e;color:#dcdcaa;padding:8px;border-radius:4px;margin-top:4px;'>az ad sp create --id ${missingId}</code><br>
+<strong>Option C - Provision via PowerShell (Microsoft Graph):</strong><br>
+<code style='display:block;background:#1e1e1e;color:#dcdcaa;padding:8px;border-radius:4px;margin-top:4px;'>Connect-MgGraph -Scopes "Application.ReadWrite.All"<br>New-MgServicePrincipal -AppId "${missingId}"</code><br>
+${missingId === ppEnvSvcId ? `<strong>Option D - Create a Power Platform environment</strong> in the <a href="https://admin.powerplatform.microsoft.com" target="_blank" rel="noopener">Power Platform admin center</a>. Creating any environment provisions this SP automatically.<br><br>` : ''}
+${resetButton}`;
+        } else if (errorDesc.includes('AADSTS65001') || errorDesc.includes('AADSTS90008') || (errorDesc.includes('consent') && !errorDesc.includes('AADSTS650052'))) {
             let savedForHint2 = null;
             try { savedForHint2 = JSON.parse(localStorage.getItem('d365_app_updater_creds') || sessionStorage.getItem('d365_app_updater_creds_temp') || 'null'); } catch (e) {}
             const tenantHint = (savedForHint2 && savedForHint2.tenantId) ? savedForHint2.tenantId : 'common';
             const clientHint = (savedForHint2 && savedForHint2.clientId) ? savedForHint2.clientId : '';
-            const consentUrl = `https://login.microsoftonline.com/${tenantHint}/adminconsent?client_id=${encodeURIComponent(clientHint)}&redirect_uri=${encodeURIComponent(window.location.origin + window.location.pathname)}`;
+            // Omit redirect_uri so Microsoft displays the actual consent screen
+            // instead of silently bouncing back to this SPA.
+            const consentUrl = `https://login.microsoftonline.com/${tenantHint}/adminconsent?client_id=${encodeURIComponent(clientHint)}`;
             friendlyMessage = `<strong>Admin consent required</strong><br><br>
 The app needs admin consent in your tenant. Even as a Global Admin, you must grant consent explicitly the first time.<br><br>
 <strong>Raw error:</strong> <code style='font-size:11px;word-break:break-all'>${errorDesc}</code><br><br>
-<a href="${consentUrl}" target="_blank" rel="noopener" style="display:inline-block;background:#0078d4;color:white;padding:10px 16px;border-radius:6px;text-decoration:none;font-weight:600;margin-top:8px;">Grant admin consent</a>${resetButton}`;
+<a href="${consentUrl}" target="_blank" rel="noopener" style="display:inline-block;background:#0078d4;color:white;padding:10px 16px;border-radius:6px;text-decoration:none;font-weight:600;margin-top:8px;">Grant admin consent</a><br><br>
+<small>After approving, come back here and click <em>Start Fresh</em>.</small>${resetButton}`;
         } else if (errorDesc.includes('AADSTS50020')) {
             friendlyMessage = `<strong>Wrong account / guest user</strong><br><br>
 The account you signed in with isn't a member of the target tenant (often happens with guest accounts or when signed in with a personal Microsoft account).<br><br>
