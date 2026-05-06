@@ -276,6 +276,30 @@ document.addEventListener('DOMContentLoaded', async function() {
     
     document.getElementById('authForm').addEventListener('submit', handleAuthentication);
     document.getElementById('logoutBtn').addEventListener('click', handleLogout);
+
+    // After a successful auto-fix provisioning, finishAutoFixAndReconnect sets
+    // d365_app_updater_autoConnect and reloads the page. Detect the flag here,
+    // clear it, and submit the form so the user lands on the dashboard without
+    // having to click Connect again.
+    try {
+        if (sessionStorage.getItem('d365_app_updater_autoConnect') === '1') {
+            sessionStorage.removeItem('d365_app_updater_autoConnect');
+            const authForm = document.getElementById('authForm');
+            const orgUrlVal = (document.getElementById('orgUrl') || {}).value;
+            const clientIdVal = (document.getElementById('clientId') || {}).value;
+            if (authForm && orgUrlVal && clientIdVal) {
+                logInfo('Auto-connect after auto-fix provisioning');
+                // Defer one tick so other init listeners are wired up.
+                setTimeout(function() {
+                    if (typeof authForm.requestSubmit === 'function') {
+                        authForm.requestSubmit();
+                    } else {
+                        authForm.dispatchEvent(new Event('submit', { cancelable: true, bubbles: true }));
+                    }
+                }, 0);
+            }
+        }
+    } catch (e) { /* best-effort */ }
     document.getElementById('refreshAppsBtn').addEventListener('click', loadApplications);
     document.getElementById('updateAllBtn').addEventListener('click', updateAllApps);
     document.getElementById('reinstallAllBtn').addEventListener('click', reinstallAllApps);
@@ -3692,6 +3716,32 @@ window.closeModal = closeModal;
 // loginPopup will surface the missing-consent error and we display a clear
 // next step.
 // ═══════════════════════════════════════════════════════════════════════════
+
+// Helper: after a successful auto-fix provisioning, restore the user's saved
+// creds (which handleRedirectResponse wiped) into the primary localStorage key
+// so loadSavedCredentials() picks them up after reload, then set a one-shot
+// flag so the connect form auto-submits on the next page load. Result: the
+// user goes straight from "Fix automatically" -> popup approval -> dashboard,
+// without ever seeing the Connect form again.
+function finishAutoFixAndReconnect(creds) {
+    try {
+        if (creds && creds.clientId) {
+            // Persist for loadSavedCredentials() on reload.
+            localStorage.setItem('d365_app_updater_creds', JSON.stringify({
+                orgUrl: creds.orgUrl || '',
+                clientId: creds.clientId,
+                tenantId: creds.tenantId || ''
+            }));
+        }
+        sessionStorage.setItem('d365_app_updater_autoConnect', '1');
+        // Clear the recovery slot - it's done its job.
+        sessionStorage.removeItem('d365_app_updater_creds_recovery');
+    } catch (e) { /* best-effort */ }
+    // Brief delay so the user can read the success message, then reload and
+    // auto-connect.
+    setTimeout(function() { window.location.reload(); }, 1200);
+}
+
 window.autoFixMissingSp = async function(missingId, missingName) {
     const btn = document.getElementById('autoFixBtn');
     const label = document.getElementById('autoFixBtnLabel');
@@ -3887,8 +3937,9 @@ window.autoFixMissingSp = async function(missingId, missingName) {
         if (checkResp.ok) {
             const checkData = await checkResp.json();
             if (checkData && checkData.value && checkData.value.length > 0) {
-                setStatus('&#x2705; <strong>' + missingName + '</strong> is now provisioned in your tenant. Click <em>Start Fresh</em> below to retry the connection.', '#7be09b');
+                setStatus('&#x2705; <strong>' + missingName + '</strong> is now provisioned in your tenant. Reconnecting...', '#7be09b');
                 setBtn('&#x2705; Already provisioned', true);
+                finishAutoFixAndReconnect(creds);
                 return;
             }
         }
@@ -3900,8 +3951,9 @@ window.autoFixMissingSp = async function(missingId, missingName) {
         });
 
         if (createResp.ok) {
-            setStatus('&#x2705; <strong>' + missingName + '</strong> provisioned successfully. Click <em>Start Fresh</em> below to retry the connection.', '#7be09b');
-            setBtn('&#x2705; Done &mdash; click Start Fresh', true);
+            setStatus('&#x2705; <strong>' + missingName + '</strong> provisioned successfully. Reconnecting...', '#7be09b');
+            setBtn('&#x2705; Done', true);
+            finishAutoFixAndReconnect(creds);
             return;
         }
 
