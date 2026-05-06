@@ -392,24 +392,25 @@ After consent succeeds, return here and click <em>Start Fresh</em>.${resetButton
             try { savedForHint2 = JSON.parse(localStorage.getItem('d365_app_updater_creds') || sessionStorage.getItem('d365_app_updater_creds_temp') || 'null'); } catch (e) {}
             const tenantHint = (savedForHint2 && savedForHint2.tenantId) ? savedForHint2.tenantId : 'common';
 
-            // Direct provisioning: admin-consent the resource SP itself.
-            // No redirect_uri so the user sees the Microsoft consent screen and
-            // doesn't get bounced silently back to this SPA.
-            const provisionUrl = `https://login.microsoftonline.com/${tenantHint}/adminconsent?client_id=${missingId}`;
+            // NOTE: We intentionally do NOT offer an /adminconsent?client_id=<missingId>
+            // button. Power Platform Environment Service / Dynamics CRM / Power Platform API
+            // are Microsoft first-party apps. Triggering admin consent against them as a
+            // third party fails with AADSTS65002 ("Consent between first party application
+            // ... and first party resource ... must be configured via preauthorization").
+            // The only reliable fixes are: provisioning the SP directly via Graph
+            // (Azure CLI / PowerShell), or creating the resource in the Power Platform
+            // admin center (which provisions the SP as a side effect).
 
             friendlyMessage = `<strong>${missingName} is not provisioned in your tenant</strong><br><br>
-This is <em>not</em> a consent problem with this app. Your tenant is missing the Microsoft-owned service principal for <strong>${missingName}</strong> (<code>${missingId}</code>). Granting admin consent on the D365 App Updater app registration will not create it.<br><br>
+This is <em>not</em> a consent problem with this app. Your tenant is missing the Microsoft-owned service principal for <strong>${missingName}</strong> (<code>${missingId}</code>). Granting admin consent on the D365 App Updater app registration will not create it, and Microsoft does not allow third-party apps to trigger consent for first-party services like this one.<br><br>
 <strong>Raw error:</strong> <code style='font-size:11px;word-break:break-all'>${errorDesc}</code><br><br>
-<strong>Pick one of these fixes (admin required):</strong><br><br>
-<strong>Option A - Provision via admin consent URL (one click):</strong><br>
-<a href="${provisionUrl}" target="_blank" rel="noopener" style="display:inline-block;background:#0078d4;color:white;padding:10px 16px;border-radius:6px;text-decoration:none;font-weight:600;margin-top:6px;">Provision ${missingName} in this tenant</a><br>
-<small>Opens the Microsoft consent screen. After approving, come back and click <em>Start Fresh</em>.</small><br><br>
-<strong>Option B - Provision via Azure CLI:</strong><br>
-<code style='display:block;background:#1e1e1e;color:#dcdcaa;padding:8px;border-radius:4px;margin-top:4px;'>az ad sp create --id ${missingId}</code><br>
-<strong>Option C - Provision via PowerShell (Microsoft Graph):</strong><br>
-<code style='display:block;background:#1e1e1e;color:#dcdcaa;padding:8px;border-radius:4px;margin-top:4px;'>Connect-MgGraph -Scopes "Application.ReadWrite.All"<br>New-MgServicePrincipal -AppId "${missingId}"</code><br>
-${missingId === ppEnvSvcId ? `<strong>Option D - Create a Power Platform environment</strong> in the <a href="https://admin.powerplatform.microsoft.com" target="_blank" rel="noopener">Power Platform admin center</a>. Creating any environment provisions this SP automatically.<br><br>` : ''}
-${resetButton}`;
+<strong>Pick one of these fixes (tenant admin required):</strong><br><br>
+<strong>Option A &mdash; Azure CLI (fastest):</strong><br>
+<code style='display:block;background:#1e1e1e;color:#dcdcaa;padding:8px;border-radius:4px;margin-top:4px;'>az login --tenant ${tenantHint}<br>az ad sp create --id ${missingId}</code><br>
+<strong>Option B &mdash; PowerShell (Microsoft Graph):</strong><br>
+<code style='display:block;background:#1e1e1e;color:#dcdcaa;padding:8px;border-radius:4px;margin-top:4px;'>Install-Module Microsoft.Graph -Scope CurrentUser<br>Connect-MgGraph -TenantId ${tenantHint} -Scopes "Application.ReadWrite.All"<br>New-MgServicePrincipal -AppId "${missingId}"</code><br>
+${missingId === ppEnvSvcId ? `<strong>Option C &mdash; Create a Power Platform environment</strong> in the <a href="https://admin.powerplatform.microsoft.com" target="_blank" rel="noopener">Power Platform admin center</a>. Creating any environment provisions this service principal automatically.<br><br>` : ''}
+<small>After provisioning, return here and click <em>Start Fresh</em>.</small>${resetButton}`;
         } else if (errorDesc.includes('AADSTS65001') || errorDesc.includes('AADSTS90008') || (errorDesc.includes('consent') && !errorDesc.includes('AADSTS650052'))) {
             let savedForHint2 = null;
             try { savedForHint2 = JSON.parse(localStorage.getItem('d365_app_updater_creds') || sessionStorage.getItem('d365_app_updater_creds_temp') || 'null'); } catch (e) {}
