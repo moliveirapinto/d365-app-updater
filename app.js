@@ -327,7 +327,19 @@ async function handleRedirectResponse() {
 
         logError(`Azure AD returned an error: ${error} / ${aadstsCode}`);
         logError('Azure AD Error description', errorDesc);
-        
+
+        // Preserve creds in a recovery slot BEFORE wiping, so the AADSTS650052
+        // auto-fix button (window.autoFixMissingSp) can still read tenantId/clientId.
+        // Wiping the primary key prevents auto-redirect loops, but we need the
+        // values for one-click recovery flows.
+        try {
+            const preserveCreds = localStorage.getItem('d365_app_updater_creds')
+                || sessionStorage.getItem('d365_app_updater_creds_temp');
+            if (preserveCreds) {
+                sessionStorage.setItem('d365_app_updater_creds_recovery', preserveCreds);
+            }
+        } catch (e) { /* best-effort */ }
+
         // Clear all auth state
         localStorage.removeItem('d365_app_updater_creds');
         sessionStorage.removeItem('d365_auth_step');
@@ -3699,9 +3711,33 @@ window.autoFixMissingSp = async function(missingId, missingName) {
             setStatus('MSAL library not loaded. Refresh the page and try again.', '#ff6b6b');
             return;
         }
-        // Resolve creds saved by the connect flow.
+        // Resolve creds saved by the connect flow. Note: at the moment AADSTS650052
+        // surfaces, handleRedirectResponse already wiped the primary creds keys to
+        // prevent redirect loops. It writes a copy to d365_app_updater_creds_recovery
+        // (sessionStorage) specifically for this flow, so we look there first.
         let creds = null;
-        try { creds = JSON.parse(localStorage.getItem('d365_app_updater_creds') || sessionStorage.getItem('d365_app_updater_creds_temp') || 'null'); } catch (e) {}
+        try {
+            creds = JSON.parse(
+                sessionStorage.getItem('d365_app_updater_creds_recovery')
+                || localStorage.getItem('d365_app_updater_creds')
+                || sessionStorage.getItem('d365_app_updater_creds_temp')
+                || 'null'
+            );
+        } catch (e) {}
+        // Fallback: read from the visible Connect form if the user hasn't navigated.
+        if (!creds || !creds.clientId) {
+            try {
+                const formClientId = document.getElementById('clientId') && document.getElementById('clientId').value;
+                const formTenantId = document.getElementById('tenantId') && document.getElementById('tenantId').value;
+                const formOrgUrl = document.getElementById('orgUrl') && document.getElementById('orgUrl').value;
+                if (formClientId) {
+                    creds = creds || {};
+                    creds.clientId = creds.clientId || formClientId;
+                    creds.tenantId = creds.tenantId || formTenantId || creds.tenantId;
+                    creds.orgUrl = creds.orgUrl || formOrgUrl;
+                }
+            } catch (e) {}
+        }
         const tenantId = (creds && creds.tenantId) ? creds.tenantId : 'common';
         const clientId = creds && creds.clientId;
         if (!clientId) {
