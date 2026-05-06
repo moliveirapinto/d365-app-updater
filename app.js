@@ -374,8 +374,9 @@ After consent succeeds, return here and click <em>Start Fresh</em>.${resetButton
             // Resource service principal (e.g. Power Platform Environment Service)
             // does not exist in the user's tenant. Granting admin consent on the
             // user's app reg WILL NOT fix this - the missing SP is a Microsoft-owned
-            // *resource* SP, not the customer app. Provision it directly.
-            // Try to extract the missing resource appId from the error description.
+            // *resource* SP, not the customer app. Provision it directly via Graph
+            // (POST /servicePrincipals { appId }) using the autoFixMissingSp helper
+            // exposed below as window.autoFixMissingSp.
             const ppEnvSvcId = '0e0bf3cc-3078-4fd4-9ef3-cb6dc0245b10'; // Power Platform Environment Service
             const dynamicsCrmId = '00000007-0000-0000-c000-000000000000'; // Dynamics CRM
             const ppApiId = '475226c6-020e-4fb2-8a90-7a972cbfc1d4';      // Power Platform API
@@ -397,20 +398,32 @@ After consent succeeds, return here and click <em>Start Fresh</em>.${resetButton
             // are Microsoft first-party apps. Triggering admin consent against them as a
             // third party fails with AADSTS65002 ("Consent between first party application
             // ... and first party resource ... must be configured via preauthorization").
-            // The only reliable fixes are: provisioning the SP directly via Graph
-            // (Azure CLI / PowerShell), or creating the resource in the Power Platform
-            // admin center (which provisions the SP as a side effect).
+            // Instead, autoFixMissingSp does the same thing 'az ad sp create --id <id>'
+            // does under the hood: a Graph POST to /servicePrincipals { appId }.
 
+            const escMissingName = missingName.replace(/'/g, "\\'");
             friendlyMessage = `<strong>${missingName} is not provisioned in your tenant</strong><br><br>
 This is <em>not</em> a consent problem with this app. Your tenant is missing the Microsoft-owned service principal for <strong>${missingName}</strong> (<code>${missingId}</code>). Granting admin consent on the D365 App Updater app registration will not create it, and Microsoft does not allow third-party apps to trigger consent for first-party services like this one.<br><br>
 <strong>Raw error:</strong> <code style='font-size:11px;word-break:break-all'>${errorDesc}</code><br><br>
-<strong>Pick one of these fixes (tenant admin required):</strong><br><br>
-<strong>Option A &mdash; Azure CLI (fastest):</strong><br>
+<div id="autoFixContainer" style="background:#0b3a66;border:1px solid #1565c0;border-radius:8px;padding:14px;margin-bottom:12px;">
+  <strong style="color:#fff;">Recommended &mdash; Fix this for me</strong><br>
+  <small style="color:#cfe3ff;">A tenant admin must click. We'll sign you in once with Microsoft Graph permission, then provision <strong>${missingName}</strong> in your tenant. No CLI needed.</small><br>
+  <button id="autoFixBtn" onclick="window.autoFixMissingSp('${missingId}','${escMissingName}')" style="margin-top:10px;background:#0078d4;color:#fff;border:none;padding:10px 18px;border-radius:6px;cursor:pointer;font-weight:600;">
+    <span id="autoFixBtnLabel">&#x1F527; Fix automatically (admin only)</span>
+  </button>
+  <div id="autoFixStatus" style="margin-top:10px;color:#cfe3ff;font-size:0.85rem;"></div>
+</div>
+<details style="margin-bottom:8px;">
+<summary style="cursor:pointer;color:#9bb3cc;">Manual options (advanced)</summary>
+<div style="padding-top:10px;">
+<strong>Option A &mdash; Azure CLI:</strong><br>
 <code style='display:block;background:#1e1e1e;color:#dcdcaa;padding:8px;border-radius:4px;margin-top:4px;'>az login --tenant ${tenantHint}<br>az ad sp create --id ${missingId}</code><br>
 <strong>Option B &mdash; PowerShell (Microsoft Graph):</strong><br>
 <code style='display:block;background:#1e1e1e;color:#dcdcaa;padding:8px;border-radius:4px;margin-top:4px;'>Install-Module Microsoft.Graph -Scope CurrentUser<br>Connect-MgGraph -TenantId ${tenantHint} -Scopes "Application.ReadWrite.All"<br>New-MgServicePrincipal -AppId "${missingId}"</code><br>
 ${missingId === ppEnvSvcId ? `<strong>Option C &mdash; Create a Power Platform environment</strong> in the <a href="https://admin.powerplatform.microsoft.com" target="_blank" rel="noopener">Power Platform admin center</a>. Creating any environment provisions this service principal automatically.<br><br>` : ''}
-<small>After provisioning, return here and click <em>Start Fresh</em>.</small>${resetButton}`;
+</div>
+</details>
+<small>After it succeeds, return here and click <em>Start Fresh</em>.</small>${resetButton}`;
         } else if (errorDesc.includes('AADSTS65001') || errorDesc.includes('AADSTS90008') || (errorDesc.includes('consent') && !errorDesc.includes('AADSTS650052'))) {
             let savedForHint2 = null;
             try { savedForHint2 = JSON.parse(localStorage.getItem('d365_app_updater_creds') || sessionStorage.getItem('d365_app_updater_creds_temp') || 'null'); } catch (e) {}
@@ -3645,6 +3658,156 @@ function showAlert(title, message, type) {
 window.updateSingleApp = updateSingleApp;
 window.installApp = installApp;
 window.closeModal = closeModal;
+
+// ═══════════════════════════════════════════════════════════════════════════
+// AUTO-FIX: Provision a missing Microsoft first-party service principal in
+// the user's tenant. Triggered from the AADSTS650052 error UI by clicking
+// the blue "Fix automatically" button.
+//
+// What it does (equivalent to `az ad sp create --id <appId>`):
+//   POST https://graph.microsoft.com/v1.0/servicePrincipals { "appId": <id> }
+//
+// Why we need a separate MSAL flow here:
+// At the moment AADSTS650052 is shown, the user's interactive sign-in returned
+// an error (no token, no MSAL account). So we cannot reuse acquireGraphToken().
+// We build a fresh MSAL instance from the saved org/clientId/tenantId and run
+// loginPopup against the Graph resource (which is unaffected by the missing
+// PPES/Dynamics CRM/Power Platform API service principal).
+//
+// Permission required on the customer's app reg: Microsoft Graph
+// `Application.ReadWrite.All` (delegated). The Automated Setup Wizard already
+// adds this. If a user clicks Connect with a hand-built app reg that lacks it,
+// loginPopup will surface the missing-consent error and we display a clear
+// next step.
+// ═══════════════════════════════════════════════════════════════════════════
+window.autoFixMissingSp = async function(missingId, missingName) {
+    const btn = document.getElementById('autoFixBtn');
+    const label = document.getElementById('autoFixBtnLabel');
+    const status = document.getElementById('autoFixStatus');
+    function setStatus(html, color) {
+        if (status) {
+            status.innerHTML = html;
+            status.style.color = color || '#cfe3ff';
+        }
+    }
+    function setBtn(text, disabled) {
+        if (btn) btn.disabled = !!disabled;
+        if (label) label.innerHTML = text;
+    }
+    try {
+        if (typeof msal === 'undefined') {
+            setStatus('MSAL library not loaded. Refresh the page and try again.', '#ff6b6b');
+            return;
+        }
+        // Resolve creds saved by the connect flow.
+        let creds = null;
+        try { creds = JSON.parse(localStorage.getItem('d365_app_updater_creds') || sessionStorage.getItem('d365_app_updater_creds_temp') || 'null'); } catch (e) {}
+        const tenantId = (creds && creds.tenantId) ? creds.tenantId : 'common';
+        const clientId = creds && creds.clientId;
+        if (!clientId) {
+            setStatus('Missing Client ID in saved credentials. Click <em>Start Fresh</em>, re-enter Client ID, then retry.', '#ff6b6b');
+            return;
+        }
+
+        setBtn('<i class="fas fa-spinner fa-spin"></i> Signing you in...', true);
+        setStatus('Opening Microsoft sign-in popup. Approve the Application.ReadWrite.All permission when asked.');
+
+        // Build a fresh MSAL instance using the same config helper the app uses.
+        const cfg = (typeof createMsalConfig === 'function')
+            ? createMsalConfig(tenantId, clientId)
+            : {
+                auth: {
+                    clientId: clientId,
+                    authority: 'https://login.microsoftonline.com/' + (tenantId || 'common'),
+                    redirectUri: window.location.origin + window.location.pathname
+                },
+                cache: { cacheLocation: 'sessionStorage', storeAuthStateInCookie: false }
+            };
+        const fixMsal = new msal.PublicClientApplication(cfg);
+        if (typeof fixMsal.initialize === 'function') {
+            await fixMsal.initialize();
+        }
+
+        const scopes = ['https://graph.microsoft.com/Application.ReadWrite.All'];
+        let tokenResp;
+        try {
+            tokenResp = await fixMsal.loginPopup({ scopes, prompt: 'select_account' });
+        } catch (popupErr) {
+            const desc = (popupErr && (popupErr.errorMessage || popupErr.message)) || String(popupErr);
+            // AADSTS65001 = no consent for the requested permission on this app reg.
+            if (/AADSTS65001|consent_required/i.test(desc)) {
+                const consentUrl = 'https://login.microsoftonline.com/' + (tenantId || 'common')
+                    + '/adminconsent?client_id=' + encodeURIComponent(clientId);
+                setStatus(
+                    'Your app registration is missing the <code>Application.ReadWrite.All</code> Microsoft Graph permission. '
+                    + '<a href="' + consentUrl + '" target="_blank" rel="noopener" style="color:#fff;text-decoration:underline;">Grant admin consent on the app reg</a>, '
+                    + 'then click <strong>Fix automatically</strong> again.',
+                    '#ffd166'
+                );
+            } else if (/popup_window_error|user_cancelled|popup closed/i.test(desc)) {
+                setStatus('Sign-in popup was closed. Click the button again to retry.', '#ffd166');
+            } else {
+                setStatus('Sign-in failed: ' + desc, '#ff6b6b');
+            }
+            setBtn('&#x1F527; Fix automatically (admin only)', false);
+            return;
+        }
+
+        const graphToken = tokenResp && tokenResp.accessToken;
+        if (!graphToken) {
+            setStatus('Did not receive a Microsoft Graph access token. Try again.', '#ff6b6b');
+            setBtn('&#x1F527; Fix automatically (admin only)', false);
+            return;
+        }
+
+        setBtn('<i class="fas fa-spinner fa-spin"></i> Provisioning ' + missingName + '...', true);
+        setStatus('Calling Microsoft Graph: POST /servicePrincipals { appId: ' + missingId + ' } &mdash; this is exactly what <code>az ad sp create</code> does.');
+
+        // Idempotent check first.
+        const checkUrl = 'https://graph.microsoft.com/v1.0/servicePrincipals?$filter=appId eq \'' + missingId + '\'&$select=id,appId,displayName';
+        const checkResp = await fetch(checkUrl, { headers: { 'Authorization': 'Bearer ' + graphToken } });
+        if (checkResp.ok) {
+            const checkData = await checkResp.json();
+            if (checkData && checkData.value && checkData.value.length > 0) {
+                setStatus('&#x2705; <strong>' + missingName + '</strong> is now provisioned in your tenant. Click <em>Start Fresh</em> below to retry the connection.', '#7be09b');
+                setBtn('&#x2705; Already provisioned', true);
+                return;
+            }
+        }
+
+        const createResp = await fetch('https://graph.microsoft.com/v1.0/servicePrincipals', {
+            method: 'POST',
+            headers: { 'Authorization': 'Bearer ' + graphToken, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ appId: missingId })
+        });
+
+        if (createResp.ok) {
+            setStatus('&#x2705; <strong>' + missingName + '</strong> provisioned successfully. Click <em>Start Fresh</em> below to retry the connection.', '#7be09b');
+            setBtn('&#x2705; Done &mdash; click Start Fresh', true);
+            return;
+        }
+
+        const errText = await createResp.text();
+        let errBody = errText;
+        try { errBody = (JSON.parse(errText).error && JSON.parse(errText).error.message) || errText; } catch (e) {}
+
+        if (createResp.status === 403 || /Authorization_RequestDenied|insufficient privileges/i.test(errBody)) {
+            setStatus(
+                'Microsoft Graph rejected the request: <code>' + errBody + '</code><br>'
+                + 'The signed-in user must be a <strong>Global Administrator</strong>, <strong>Application Administrator</strong>, '
+                + 'or <strong>Cloud Application Administrator</strong>. Sign in as a user with one of those roles and try again, '
+                + 'or use the manual options above.',
+                '#ff6b6b'
+            );
+        } else {
+            setStatus('Provisioning failed (' + createResp.status + '): <code>' + errBody + '</code><br>Try the manual options above.', '#ff6b6b');
+        }
+        setBtn('&#x1F527; Try again', false);
+    } catch (e) {
+        setStatus('Unexpected error: ' + (e && e.message ? e.message : String(e)) + '<br>Try the manual options above.', '#ff6b6b');
+        setBtn('&#x1F527; Try again', false);
+    }
+};
 
 // â•â•â• SSO AUTO-CONNECT FROM COMPANION APPS (e.g. D365 DataGen) â•â•â•
 // Shared multi-tenant Entra app registration. Users still see the same
