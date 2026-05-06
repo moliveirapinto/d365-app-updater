@@ -3748,6 +3748,28 @@ window.autoFixMissingSp = async function(missingId, missingName) {
         setBtn('<i class="fas fa-spinner fa-spin"></i> Signing you in...', true);
         setStatus('Opening Microsoft sign-in popup. Approve the Application.ReadWrite.All permission when asked.');
 
+        // Clear any leftover MSAL interaction lock from the failed redirect that
+        // surfaced AADSTS650052. Without this, loginPopup throws
+        // "interaction_in_progress" because MSAL still thinks the previous
+        // interactive call is in flight.
+        try {
+            const sweep = (store) => {
+                const toRemove = [];
+                for (let i = 0; i < store.length; i++) {
+                    const k = store.key(i);
+                    if (!k) continue;
+                    if (k.startsWith('msal.')
+                        || k.indexOf('interaction.status') !== -1
+                        || k.indexOf(clientId) !== -1) {
+                        toRemove.push(k);
+                    }
+                }
+                toRemove.forEach(k => store.removeItem(k));
+            };
+            sweep(localStorage);
+            sweep(sessionStorage);
+        } catch (e) { /* best-effort */ }
+
         // Build a fresh MSAL instance using the same config helper the app uses.
         const cfg = (typeof createMsalConfig === 'function')
             ? createMsalConfig(tenantId, clientId)
@@ -3766,8 +3788,37 @@ window.autoFixMissingSp = async function(missingId, missingName) {
 
         const scopes = ['https://graph.microsoft.com/Application.ReadWrite.All'];
         let tokenResp;
+        const callLoginPopup = async () => fixMsal.loginPopup({ scopes, prompt: 'select_account' });
         try {
-            tokenResp = await fixMsal.loginPopup({ scopes, prompt: 'select_account' });
+            try {
+                tokenResp = await callLoginPopup();
+            } catch (firstErr) {
+                const firstDesc = (firstErr && (firstErr.errorMessage || firstErr.message)) || String(firstErr);
+                // BrowserAuthError "interaction_in_progress": MSAL still has a stale
+                // lock from the failed redirect. Clear it directly and retry once.
+                if (/interaction_in_progress|interaction is currently in progress/i.test(firstDesc)) {
+                    try {
+                        const sweep2 = (store) => {
+                            const toRemove = [];
+                            for (let i = 0; i < store.length; i++) {
+                                const k = store.key(i);
+                                if (!k) continue;
+                                if (k.startsWith('msal.')
+                                    || k.indexOf('interaction.status') !== -1
+                                    || k.indexOf(clientId) !== -1) {
+                                    toRemove.push(k);
+                                }
+                            }
+                            toRemove.forEach(k => store.removeItem(k));
+                        };
+                        sweep2(localStorage);
+                        sweep2(sessionStorage);
+                    } catch (e) {}
+                    tokenResp = await callLoginPopup();
+                } else {
+                    throw firstErr;
+                }
+            }
         } catch (popupErr) {
             const desc = (popupErr && (popupErr.errorMessage || popupErr.message)) || String(popupErr);
             // AADSTS65001 = no consent for the requested permission on this app reg.
@@ -3782,6 +3833,8 @@ window.autoFixMissingSp = async function(missingId, missingName) {
                 );
             } else if (/popup_window_error|user_cancelled|popup closed/i.test(desc)) {
                 setStatus('Sign-in popup was closed. Click the button again to retry.', '#ffd166');
+            } else if (/interaction_in_progress|interaction is currently in progress/i.test(desc)) {
+                setStatus('Another sign-in is already in progress. Close any Microsoft sign-in popups or other tabs of this app, then click <strong>Fix automatically</strong> again. If the issue persists, click <em>Start Fresh</em>.', '#ffd166');
             } else {
                 setStatus('Sign-in failed: ' + desc, '#ff6b6b');
             }
