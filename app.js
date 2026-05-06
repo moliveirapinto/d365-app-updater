@@ -3748,26 +3748,41 @@ window.autoFixMissingSp = async function(missingId, missingName) {
         setBtn('<i class="fas fa-spinner fa-spin"></i> Signing you in...', true);
         setStatus('Opening Microsoft sign-in popup. Approve the Application.ReadWrite.All permission when asked.');
 
-        // Clear any leftover MSAL interaction lock from the failed redirect that
-        // surfaced AADSTS650052. Without this, loginPopup throws
-        // "interaction_in_progress" because MSAL still thinks the previous
-        // interactive call is in flight.
+        // Aggressively clear MSAL state from the failed redirect that produced
+        // AADSTS650052. The interaction lock can live in localStorage,
+        // sessionStorage, AND cookies (because createMsalConfig uses
+        // storeAuthStateInCookie: true). If any one survives, MSAL throws
+        // BrowserAuthError "interaction_in_progress".
+        const matchesMsal = (k) => !!k && (
+            k.startsWith('msal.')
+            || k.indexOf('interaction.status') !== -1
+            || k.indexOf(clientId) !== -1
+        );
         try {
-            const sweep = (store) => {
+            const sweepStore = (store) => {
                 const toRemove = [];
                 for (let i = 0; i < store.length; i++) {
                     const k = store.key(i);
-                    if (!k) continue;
-                    if (k.startsWith('msal.')
-                        || k.indexOf('interaction.status') !== -1
-                        || k.indexOf(clientId) !== -1) {
-                        toRemove.push(k);
-                    }
+                    if (matchesMsal(k)) toRemove.push(k);
                 }
                 toRemove.forEach(k => store.removeItem(k));
             };
-            sweep(localStorage);
-            sweep(sessionStorage);
+            sweepStore(localStorage);
+            sweepStore(sessionStorage);
+            // Cookies: expire any msal.* / clientId cookies on this path and root.
+            const cookies = (document.cookie || '').split(';');
+            cookies.forEach(c => {
+                const eq = c.indexOf('=');
+                const name = (eq >= 0 ? c.substring(0, eq) : c).trim();
+                if (matchesMsal(name)) {
+                    const paths = ['/', window.location.pathname,
+                        window.location.pathname.replace(/[^/]+$/, '')];
+                    paths.forEach(p => {
+                        document.cookie = `${name}=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=${p}`;
+                        document.cookie = `${name}=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=${p}; domain=${window.location.hostname}`;
+                    });
+                }
+            });
         } catch (e) { /* best-effort */ }
 
         // Build a fresh MSAL instance using the same config helper the app uses.
@@ -3785,6 +3800,12 @@ window.autoFixMissingSp = async function(missingId, missingName) {
         if (typeof fixMsal.initialize === 'function') {
             await fixMsal.initialize();
         }
+        // CRITICAL: handleRedirectPromise releases MSAL's interaction lock.
+        // Calling it on a fresh instance with no hash is a no-op for redirect
+        // processing but resets the interaction status flag in cache, which is
+        // what loginPopup checks. Without this, the lock from the previous
+        // failed redirect persists across instances (it's stored, not in-memory).
+        try { await fixMsal.handleRedirectPromise(); } catch (e) { /* ignore */ }
 
         const scopes = ['https://graph.microsoft.com/Application.ReadWrite.All'];
         let tokenResp;
@@ -3803,16 +3824,24 @@ window.autoFixMissingSp = async function(missingId, missingName) {
                             for (let i = 0; i < store.length; i++) {
                                 const k = store.key(i);
                                 if (!k) continue;
-                                if (k.startsWith('msal.')
-                                    || k.indexOf('interaction.status') !== -1
-                                    || k.indexOf(clientId) !== -1) {
-                                    toRemove.push(k);
-                                }
+                                if (matchesMsal(k)) toRemove.push(k);
                             }
                             toRemove.forEach(k => store.removeItem(k));
                         };
                         sweep2(localStorage);
                         sweep2(sessionStorage);
+                        // cookies too
+                        (document.cookie || '').split(';').forEach(c => {
+                            const eq = c.indexOf('=');
+                            const name = (eq >= 0 ? c.substring(0, eq) : c).trim();
+                            if (matchesMsal(name)) {
+                                ['/', window.location.pathname,
+                                 window.location.pathname.replace(/[^/]+$/, '')].forEach(p => {
+                                    document.cookie = `${name}=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=${p}`;
+                                });
+                            }
+                        });
+                        try { await fixMsal.handleRedirectPromise(); } catch (e) {}
                     } catch (e) {}
                     tokenResp = await callLoginPopup();
                 } else {
