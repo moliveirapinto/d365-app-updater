@@ -457,6 +457,8 @@ After consent succeeds, return here and click <em>Start Fresh</em>.${resetButton
                 [ppApiId]: 'Power Platform API'
             };
             const missingName = knownNames[missingId] || 'the required Microsoft service';
+            // Capitalized form for sentence-start usage
+            const missingNameSentence = missingName.charAt(0).toUpperCase() + missingName.slice(1);
 
             let savedForHint2 = null;
             try { savedForHint2 = JSON.parse(localStorage.getItem('d365_app_updater_creds') || sessionStorage.getItem('d365_app_updater_creds_temp') || 'null'); } catch (e) {}
@@ -471,7 +473,7 @@ After consent succeeds, return here and click <em>Start Fresh</em>.${resetButton
             // does under the hood: a Graph POST to /servicePrincipals { appId }.
 
             const escMissingName = missingName.replace(/'/g, "\\'");
-            friendlyMessage = `<strong>${missingName} is not provisioned in your tenant</strong><br><br>
+            friendlyMessage = `<strong>Service not provisioned: ${missingName}</strong><br><br>
 This is <em>not</em> a consent problem with this app. Your tenant is missing the Microsoft-owned service principal for <strong>${missingName}</strong> (<code>${missingId}</code>). Granting admin consent on the D365 App Updater app registration will not create it, and Microsoft does not allow third-party apps to trigger consent for first-party services like this one.<br><br>
 <strong>Raw error:</strong> <code style='font-size:11px;word-break:break-all'>${errorDesc}</code><br><br>
 <div id="autoFixContainer" style="background:#0b3a66;border:1px solid #1565c0;border-radius:8px;padding:14px;margin-bottom:12px;">
@@ -3570,9 +3572,9 @@ function showError(message) {
     hideLoading();
     // Use 'body' for HTML content, 'message' for plain text
     if (message.includes('<') && message.includes('>')) {
-        showModal({ title: 'Error', body: message, type: 'danger', confirmOnly: true });
+        showModal({ title: 'Attention', body: message, type: 'danger', confirmOnly: true });
     } else {
-        showModal({ title: 'Error', message: message, type: 'danger', confirmOnly: true });
+        showModal({ title: 'Attention', message: message, type: 'danger', confirmOnly: true });
     }
 }
 
