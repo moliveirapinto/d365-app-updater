@@ -130,6 +130,39 @@ let _pendingRedirectAuth = false;
 
 // Initialize on page load
 document.addEventListener('DOMContentLoaded', async function() {
+    // ═══ POPUP CHILD GUARD ═══════════════════════════════════════════════
+    // When MSAL loginPopup (used by autoFixMissingSp) finishes, the identity
+    // provider redirects the popup window back to redirectUri (= our app
+    // root). The popup briefly loads index.html. Without this guard our full
+    // init runs again INSIDE the popup, then any auth call MSAL makes from
+    // there hits BrowserAuthError "block_nested_popups". Detect we're a
+    // popup child, run only msal.handleRedirectPromise so MSAL can post the
+    // result to the parent and close itself, and skip everything else.
+    try {
+        const isPopupChild = !!window.opener && window.opener !== window
+            && (window.location.hash.indexOf('code=') !== -1
+                || window.location.hash.indexOf('access_token=') !== -1
+                || window.location.hash.indexOf('error=') !== -1
+                || window.location.hash.indexOf('state=') !== -1);
+        if (isPopupChild && typeof msal !== 'undefined') {
+            console.log('[init] popup-child detected, deferring to MSAL redirect handler');
+            try {
+                const credsRaw = localStorage.getItem('d365_app_updater_creds')
+                    || sessionStorage.getItem('d365_app_updater_creds_temp')
+                    || sessionStorage.getItem('d365_app_updater_creds_recovery');
+                const creds = credsRaw ? JSON.parse(credsRaw) : null;
+                if (creds && creds.clientId && typeof createMsalConfig === 'function') {
+                    const cfg = createMsalConfig(creds.tenantId || '', creds.clientId);
+                    const inst = new msal.PublicClientApplication(cfg);
+                    if (typeof inst.initialize === 'function') await inst.initialize();
+                    await inst.handleRedirectPromise();
+                }
+            } catch (e) { console.warn('[init] popup-child MSAL drain failed', e); }
+            try { document.body.style.visibility = 'hidden'; } catch (e) {}
+            return;
+        }
+    } catch (e) { /* best-effort */ }
+
     // ═══ EMERGENCY RESET: Add ?reset to URL to clear all auth state ═══
     const urlParams = new URLSearchParams(window.location.search);
     if (urlParams.has('reset')) {
