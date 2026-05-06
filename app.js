@@ -477,7 +477,7 @@ This is <em>not</em> a consent problem with this app. Your tenant is missing the
 <div id="autoFixContainer" style="background:#0b3a66;border:1px solid #1565c0;border-radius:8px;padding:14px;margin-bottom:12px;">
   <strong style="color:#fff;">Recommended &mdash; Fix this for me</strong><br>
   <small style="color:#cfe3ff;">A tenant admin must click. We'll sign you in once with Microsoft Graph permission, then provision <strong>${missingName}</strong> in your tenant. No CLI needed.</small><br>
-  <button id="autoFixBtn" onclick="window.autoFixMissingSp('${missingId}','${escMissingName}')" style="margin-top:10px;background:#0078d4;color:#fff;border:none;padding:10px 18px;border-radius:6px;cursor:pointer;font-weight:600;">
+  <button id="autoFixBtn" onclick="window.autoFixMissingSp('${missingId}','${escMissingName}')" style="margin-top:10px;background:#16a34a;color:#fff;border:none;padding:10px 18px;border-radius:6px;cursor:pointer;font-weight:600;">
     <span id="autoFixBtnLabel">&#x1F527; Fix automatically (admin only)</span>
   </button>
   <div id="autoFixStatus" style="margin-top:10px;color:#cfe3ff;font-size:0.85rem;"></div>
