@@ -412,7 +412,7 @@ async function handleRedirectResponse() {
         history.replaceState(null, '', window.location.pathname);
         
         // Show error
-        const resetButton = `<br><br><button onclick="window.location.reload()" style="background:#0078d4;color:white;border:none;padding:10px 20px;border-radius:6px;cursor:pointer;font-weight:600;">🔄 Start Fresh</button>`;
+        const resetButton = `<br><br><button onclick="window.location.reload()" style="background:#0078d4;color:white;border:none;padding:10px 20px;border-radius:6px;cursor:pointer;font-weight:600;">Start Fresh</button>`;
         
         let friendlyMessage = errorDesc;
         if (errorDesc.includes('AADSTS650057') || errorDesc.includes('not listed in the requested permissions')) {
@@ -480,7 +480,7 @@ This is <em>not</em> a consent problem with this app. Your tenant is missing the
   <strong style="color:#fff;">Recommended &mdash; Fix this for me</strong><br>
   <small style="color:#cfe3ff;">A tenant admin must click. We'll sign you in once with Microsoft Graph permission, then provision <strong>${missingName}</strong> in your tenant. No CLI needed.</small><br>
   <button id="autoFixBtn" onclick="window.autoFixMissingSp('${missingId}','${escMissingName}')" style="margin-top:10px;background:#16a34a;color:#fff;border:none;padding:10px 18px;border-radius:6px;cursor:pointer;font-weight:600;">
-    <span id="autoFixBtnLabel">&#x1F527; Fix automatically (admin only)</span>
+    <span id="autoFixBtnLabel">Fix automatically (admin only)</span>
   </button>
   <div id="autoFixStatus" style="margin-top:10px;color:#cfe3ff;font-size:0.85rem;"></div>
 </div>
@@ -771,7 +771,7 @@ The account you signed in with isn't a member of the target tenant (often happen
         
         // Provide helpful error messages for common issues
         let errorMessage = e.message;
-        const resetButton = `<br><br><button onclick="window.location.reload()" style="background:#0078d4;color:white;border:none;padding:10px 20px;border-radius:6px;cursor:pointer;font-weight:600;">🔄 Start Fresh</button>`;
+        const resetButton = `<br><br><button onclick="window.location.reload()" style="background:#0078d4;color:white;border:none;padding:10px 20px;border-radius:6px;cursor:pointer;font-weight:600;">Start Fresh</button>`;
 
         // Transient network failure (ERR_CONNECTION_CLOSED, Failed to fetch, timeout) talking to Microsoft APIs
         const isNetwork = e.isNetworkError || /Failed to fetch|NetworkError|ERR_CONNECTION|Network request failed/i.test(e.message);
@@ -3952,14 +3952,14 @@ window.autoFixMissingSp = async function(missingId, missingName) {
             } else {
                 setStatus('Sign-in failed: ' + desc, '#ff6b6b');
             }
-            setBtn('&#x1F527; Fix automatically (admin only)', false);
+            setBtn('Fix automatically (admin only)', false);
             return;
         }
 
         const graphToken = tokenResp && tokenResp.accessToken;
         if (!graphToken) {
             setStatus('Did not receive a Microsoft Graph access token. Try again.', '#ff6b6b');
-            setBtn('&#x1F527; Fix automatically (admin only)', false);
+            setBtn('Fix automatically (admin only)', false);
             return;
         }
 
@@ -4007,10 +4007,10 @@ window.autoFixMissingSp = async function(missingId, missingName) {
         } else {
             setStatus('Provisioning failed (' + createResp.status + '): <code>' + errBody + '</code><br>Try the manual options above.', '#ff6b6b');
         }
-        setBtn('&#x1F527; Try again', false);
+        setBtn('Try again', false);
     } catch (e) {
         setStatus('Unexpected error: ' + (e && e.message ? e.message : String(e)) + '<br>Try the manual options above.', '#ff6b6b');
-        setBtn('&#x1F527; Try again', false);
+        setBtn('Try again', false);
     }
 };
 
