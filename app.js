@@ -193,14 +193,23 @@ document.addEventListener('DOMContentLoaded', async function() {
         const ssoOrgUrl   = urlParams.get('orgUrl');
         const ssoClientId = urlParams.get('clientId') || (typeof SHARED_CLIENT_ID !== 'undefined' ? SHARED_CLIENT_ID : '');
         const ssoTenantId = urlParams.get('tenantId') || 'organizations';
-        // Clobber any stale cached creds so handleRedirectResponse() uses the right client
+        // Clobber any stale cached creds so handleRedirectResponse() uses the right client.
+        // Read existing clientId first so we only wipe MSAL cache when it actually changes.
+        let _existingClientId = '';
+        try { const _ec = localStorage.getItem('d365_app_updater_creds'); if (_ec) _existingClientId = (JSON.parse(_ec).clientId || ''); } catch (e) {}
         localStorage.setItem('d365_app_updater_creds', JSON.stringify({
             orgUrl: ssoOrgUrl, tenantId: ssoTenantId, clientId: ssoClientId
         }));
-        // Also wipe any stale MSAL cache that might trigger handleRedirectPromise on the wrong client
-        Object.keys(localStorage).forEach(k => { if (k.startsWith('msal.')) localStorage.removeItem(k); });
-        Object.keys(sessionStorage).forEach(k => { if (k.startsWith('msal.')) sessionStorage.removeItem(k); });
-        console.log('[SSO] Overrode cached creds with URL params, clientId=' + (ssoClientId||'').substring(0,8) + '...');
+        // Only wipe MSAL cache when clientId changed. Preserving a valid cache for the
+        // same client lets handleRedirectResponse() silently re-authenticate and
+        // land the user on the dashboard without a full Microsoft login redirect.
+        if (_existingClientId && _existingClientId !== ssoClientId) {
+            Object.keys(localStorage).forEach(k => { if (k.startsWith('msal.')) localStorage.removeItem(k); });
+            Object.keys(sessionStorage).forEach(k => { if (k.startsWith('msal.')) sessionStorage.removeItem(k); });
+            console.log('[SSO] ClientId changed - wiped MSAL cache. clientId=' + (ssoClientId||'').substring(0,8) + '...');
+        } else {
+            console.log('[SSO] Overrode cached creds (MSAL cache preserved), clientId=' + (ssoClientId||'').substring(0,8) + '...');
+        }
     }
 
     logInfo('=== APP INITIALIZATION ===');
