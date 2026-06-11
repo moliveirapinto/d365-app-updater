@@ -885,6 +885,38 @@ async function handleAuthentication(event) {
         await msalInstance.initialize();
         logInfo('MSAL initialized');
         
+        // SSO: a companion app (e.g. D365 DataGen) may have provided a loginHint.
+        const _ssoLoginHint = sessionStorage.getItem('d365_login_hint');
+
+        // ─── SILENT SSO FIRST ────────────────────────────────────────────────
+        // When we have a loginHint, attempt a silent SSO sign-in against the
+        // user's EXISTING Microsoft browser session (hidden iframe, no visible
+        // prompt) before resorting to an interactive full-page loginRedirect.
+        // This is what makes the App Updater "log the user in automatically"
+        // when launched from a companion app: if the user already has a live
+        // Microsoft session for that account, ssoSilent completes with zero
+        // prompts and we continue straight to the dashboard. We only fall back
+        // to the interactive redirect when silent auth genuinely requires
+        // interaction (no session, different account, consent needed, etc.).
+        if (_ssoLoginHint) {
+            try {
+                logInfo('SSO: attempting ssoSilent before interactive login', { loginHint: _ssoLoginHint.substring(0,8) + '...' });
+                showLoading('Signing you in...', 'Connecting via your existing Microsoft session');
+                await msalInstance.ssoSilent({ scopes: ['openid', 'profile'], loginHint: _ssoLoginHint });
+                logInfo('SSO: ssoSilent succeeded - no prompt needed, continuing without redirect');
+                // The account is now in the MSAL cache. Mark this as a post-login
+                // state and re-run the normal post-redirect flow, which will find
+                // the cached account and acquire the API tokens silently, then
+                // resolve the environment and show the dashboard.
+                sessionStorage.setItem('d365_auth_step', 'login_redirect');
+                await handleRedirectResponse();
+                return;
+            } catch (ssoErr) {
+                logWarn('SSO: ssoSilent failed, falling back to interactive login', (ssoErr && (ssoErr.errorCode || ssoErr.message)) || String(ssoErr));
+                // Fall through to the interactive loginRedirect below.
+            }
+        }
+
         // Redirect to Microsoft login — the page will reload and handleRedirectResponse() will continue
         showLoading('Authenticating...', 'Redirecting to Microsoft sign-in...');
         
@@ -893,7 +925,6 @@ async function handleAuthentication(event) {
         logInfo('Set auth step to login_redirect, calling loginRedirect...');
         
         // SSO: pass loginHint if companion app provided one
-        const _ssoLoginHint = sessionStorage.getItem('d365_login_hint');
         const _loginRequest = { scopes: ['openid', 'profile'] };
         if (_ssoLoginHint) {
             _loginRequest.loginHint = _ssoLoginHint;
