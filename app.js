@@ -473,6 +473,27 @@ After consent succeeds, return here and click <em>Start Fresh</em>.${resetButton
             try { savedForHint2 = JSON.parse(localStorage.getItem('d365_app_updater_creds') || sessionStorage.getItem('d365_app_updater_creds_temp') || 'null'); } catch (e) {}
             const tenantHint = (savedForHint2 && savedForHint2.tenantId) ? savedForHint2.tenantId : 'common';
 
+            // Eagerly prepare (build + initialize + drain + sweep) the MSAL
+            // instance the "Fix this for me" button uses, so its loginPopup can
+            // be opened SYNCHRONOUSLY on click. Doing the async init here — off
+            // the click path — is what prevents the blank sign-in popup (the
+            // browser blocks popups opened after an await; see autoFixMissingSp).
+            try {
+                let _fixClientId = (savedForHint2 && savedForHint2.clientId) || '';
+                if (!_fixClientId) {
+                    let _recov = null;
+                    try { _recov = JSON.parse(sessionStorage.getItem('d365_app_updater_creds_recovery') || 'null'); } catch (e) {}
+                    _fixClientId = (_recov && _recov.clientId) || '';
+                }
+                if (!_fixClientId) {
+                    const _el = document.getElementById('clientId');
+                    _fixClientId = (_el && _el.value) || '';
+                }
+                if (_fixClientId && typeof window.__prepFixMsal === 'function') {
+                    window.__prepFixMsal(_fixClientId, tenantHint).catch(function () {});
+                }
+            } catch (e) { /* best-effort */ }
+
             // NOTE: We intentionally do NOT offer an /adminconsent?client_id=<missingId>
             // button. Power Platform Environment Service / Dynamics CRM / Power Platform API
             // are Microsoft first-party apps. Triggering admin consent against them as a
@@ -3817,6 +3838,84 @@ function finishAutoFixAndReconnect(creds) {
     setTimeout(function() { window.location.reload(); }, 1200);
 }
 
+// ─── EAGER MSAL PREP FOR THE AUTO-FIX POPUP ────────────────────────────────
+// Builds, initializes, drains and sweeps a fresh MSAL instance BEFORE the user
+// clicks "Fix automatically". This must run off the click path so that the
+// click handler can call loginPopup synchronously (see the BLANK-POPUP FIX
+// note in autoFixMissingSp). Idempotent and cached per clientId. Resolves to a
+// ready PublicClientApplication and also stores it on window.__fixMsalReady so
+// the click handler can grab it synchronously.
+window.__prepFixMsal = function(clientId, tenantId) {
+    if (typeof msal === 'undefined' || !clientId) {
+        return Promise.reject(new Error('MSAL not loaded or missing Client ID'));
+    }
+    // Reuse an in-flight / completed prep only if it targets the same client.
+    if (window.__fixMsalPrepPromise && window.__fixMsalPrepClientId === clientId) {
+        return window.__fixMsalPrepPromise;
+    }
+    window.__fixMsalPrepClientId = clientId;
+    window.__fixMsalReady = null;
+    window.__fixMsalPrepPromise = (async () => {
+        // Sweep stale MSAL interaction locks left behind by the failed redirect
+        // that produced AADSTS650052. The lock can live in localStorage,
+        // sessionStorage AND cookies (createMsalConfig uses storeAuthStateInCookie).
+        const matchesMsal = (k) => !!k && (
+            k.startsWith('msal.')
+            || k.indexOf('interaction.status') !== -1
+            || k.indexOf(clientId) !== -1
+        );
+        try {
+            const sweepStore = (store) => {
+                const toRemove = [];
+                for (let i = 0; i < store.length; i++) {
+                    const k = store.key(i);
+                    if (matchesMsal(k)) toRemove.push(k);
+                }
+                toRemove.forEach(k => store.removeItem(k));
+            };
+            sweepStore(localStorage);
+            sweepStore(sessionStorage);
+            (document.cookie || '').split(';').forEach(c => {
+                const eq = c.indexOf('=');
+                const name = (eq >= 0 ? c.substring(0, eq) : c).trim();
+                if (matchesMsal(name)) {
+                    ['/', window.location.pathname,
+                     window.location.pathname.replace(/[^/]+$/, '')].forEach(p => {
+                        document.cookie = `${name}=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=${p}`;
+                        document.cookie = `${name}=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=${p}; domain=${window.location.hostname}`;
+                    });
+                }
+            });
+        } catch (e) { /* best-effort */ }
+
+        const cfg = (typeof createMsalConfig === 'function')
+            ? createMsalConfig(tenantId, clientId)
+            : {
+                auth: {
+                    clientId: clientId,
+                    authority: 'https://login.microsoftonline.com/' + (tenantId || 'common'),
+                    redirectUri: window.location.origin + window.location.pathname
+                },
+                cache: { cacheLocation: 'localStorage', storeAuthStateInCookie: true }
+            };
+        const inst = new msal.PublicClientApplication(cfg);
+        if (typeof inst.initialize === 'function') {
+            await inst.initialize();
+        }
+        // Releases MSAL's interaction lock so loginPopup won't throw
+        // interaction_in_progress. No-op for redirect processing (no hash here).
+        try { await inst.handleRedirectPromise(); } catch (e) { /* ignore */ }
+        window.__fixMsalReady = inst;
+        return inst;
+    })();
+    // If prep fails, clear the cached promise so a later click can retry.
+    window.__fixMsalPrepPromise.catch(() => {
+        window.__fixMsalPrepPromise = null;
+        window.__fixMsalPrepClientId = null;
+    });
+    return window.__fixMsalPrepPromise;
+};
+
 window.autoFixMissingSp = async function(missingId, missingName) {
     const btn = document.getElementById('autoFixBtn');
     const label = document.getElementById('autoFixBtnLabel');
@@ -3873,104 +3972,54 @@ window.autoFixMissingSp = async function(missingId, missingName) {
         setBtn('<i class="fas fa-spinner fa-spin"></i> Signing you in...', true);
         setStatus('Opening Microsoft sign-in popup. Approve the Application.ReadWrite.All permission when asked.');
 
-        // Aggressively clear MSAL state from the failed redirect that produced
-        // AADSTS650052. The interaction lock can live in localStorage,
-        // sessionStorage, AND cookies (because createMsalConfig uses
-        // storeAuthStateInCookie: true). If any one survives, MSAL throws
-        // BrowserAuthError "interaction_in_progress".
-        const matchesMsal = (k) => !!k && (
-            k.startsWith('msal.')
-            || k.indexOf('interaction.status') !== -1
-            || k.indexOf(clientId) !== -1
-        );
-        try {
-            const sweepStore = (store) => {
-                const toRemove = [];
-                for (let i = 0; i < store.length; i++) {
-                    const k = store.key(i);
-                    if (matchesMsal(k)) toRemove.push(k);
-                }
-                toRemove.forEach(k => store.removeItem(k));
-            };
-            sweepStore(localStorage);
-            sweepStore(sessionStorage);
-            // Cookies: expire any msal.* / clientId cookies on this path and root.
-            const cookies = (document.cookie || '').split(';');
-            cookies.forEach(c => {
-                const eq = c.indexOf('=');
-                const name = (eq >= 0 ? c.substring(0, eq) : c).trim();
-                if (matchesMsal(name)) {
-                    const paths = ['/', window.location.pathname,
-                        window.location.pathname.replace(/[^/]+$/, '')];
-                    paths.forEach(p => {
-                        document.cookie = `${name}=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=${p}`;
-                        document.cookie = `${name}=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=${p}; domain=${window.location.hostname}`;
-                    });
-                }
-            });
-        } catch (e) { /* best-effort */ }
-
-        // Build a fresh MSAL instance using the same config helper the app uses.
-        const cfg = (typeof createMsalConfig === 'function')
-            ? createMsalConfig(tenantId, clientId)
-            : {
-                auth: {
-                    clientId: clientId,
-                    authority: 'https://login.microsoftonline.com/' + (tenantId || 'common'),
-                    redirectUri: window.location.origin + window.location.pathname
-                },
-                cache: { cacheLocation: 'sessionStorage', storeAuthStateInCookie: false }
-            };
-        const fixMsal = new msal.PublicClientApplication(cfg);
-        if (typeof fixMsal.initialize === 'function') {
-            await fixMsal.initialize();
-        }
-        // CRITICAL: handleRedirectPromise releases MSAL's interaction lock.
-        // Calling it on a fresh instance with no hash is a no-op for redirect
-        // processing but resets the interaction status flag in cache, which is
-        // what loginPopup checks. Without this, the lock from the previous
-        // failed redirect persists across instances (it's stored, not in-memory).
-        try { await fixMsal.handleRedirectPromise(); } catch (e) { /* ignore */ }
-
         const scopes = ['https://graph.microsoft.com/Application.ReadWrite.All'];
+        const popupRequest = { scopes, prompt: 'select_account' };
         let tokenResp;
-        const callLoginPopup = async () => fixMsal.loginPopup({ scopes, prompt: 'select_account' });
+
+        // ─── BLANK-POPUP FIX ──────────────────────────────────────────────
+        // MSAL v2 opens the sign-in popup window SYNCHRONOUSLY inside the call
+        // to loginPopup, specifically so the window inherits the click's
+        // user-activation. If ANY `await` runs before loginPopup (initialize,
+        // handleRedirectPromise, cookie sweeps), the browser no longer treats
+        // this call as a user gesture, so the popup opens but is blocked from
+        // navigating to login.microsoftonline.com — that is the BLANK popup the
+        // user sees. Fix: build + initialize + drain + sweep a fresh MSAL
+        // instance EAGERLY the moment the AADSTS650052 panel renders (see
+        // window.__prepFixMsal), and here call loginPopup as the FIRST
+        // statement with NO preceding await so the gesture is preserved.
+        let fixMsal = window.__fixMsalReady || null;
+        let loginPromise = null;
+        if (fixMsal) {
+            // Synchronous path — gesture preserved, popup navigates correctly.
+            try { loginPromise = fixMsal.loginPopup(popupRequest); }
+            catch (e) { loginPromise = Promise.reject(e); }
+        }
+
         try {
-            try {
-                tokenResp = await callLoginPopup();
-            } catch (firstErr) {
-                const firstDesc = (firstErr && (firstErr.errorMessage || firstErr.message)) || String(firstErr);
-                // BrowserAuthError "interaction_in_progress": MSAL still has a stale
-                // lock from the failed redirect. Clear it directly and retry once.
-                if (/interaction_in_progress|interaction is currently in progress/i.test(firstDesc)) {
-                    try {
-                        const sweep2 = (store) => {
-                            const toRemove = [];
-                            for (let i = 0; i < store.length; i++) {
-                                const k = store.key(i);
-                                if (!k) continue;
-                                if (matchesMsal(k)) toRemove.push(k);
-                            }
-                            toRemove.forEach(k => store.removeItem(k));
-                        };
-                        sweep2(localStorage);
-                        sweep2(sessionStorage);
-                        // cookies too
-                        (document.cookie || '').split(';').forEach(c => {
-                            const eq = c.indexOf('=');
-                            const name = (eq >= 0 ? c.substring(0, eq) : c).trim();
-                            if (matchesMsal(name)) {
-                                ['/', window.location.pathname,
-                                 window.location.pathname.replace(/[^/]+$/, '')].forEach(p => {
-                                    document.cookie = `${name}=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=${p}`;
-                                });
-                            }
-                        });
+            if (loginPromise) {
+                tokenResp = await loginPromise;
+            } else {
+                // Eager prep had not finished yet (rare: user clicked before
+                // initialize() resolved). Build/initialize now, then open the
+                // popup. This fallback runs after an await so the popup may be
+                // blocked by the browser; if so MSAL surfaces popup_window_error
+                // which we report below with a retry hint.
+                setStatus('Preparing secure sign-in&hellip;');
+                fixMsal = await (typeof window.__prepFixMsal === 'function'
+                    ? window.__prepFixMsal(clientId, tenantId)
+                    : Promise.reject(new Error('Sign-in could not be prepared. Click the button again.')));
+                window.__fixMsalReady = fixMsal;
+                try {
+                    tokenResp = await fixMsal.loginPopup(popupRequest);
+                } catch (firstErr) {
+                    const firstDesc = (firstErr && (firstErr.errorMessage || firstErr.message)) || String(firstErr);
+                    // Stale interaction lock — drain it once and retry.
+                    if (/interaction_in_progress|interaction is currently in progress/i.test(firstDesc)) {
                         try { await fixMsal.handleRedirectPromise(); } catch (e) {}
-                    } catch (e) {}
-                    tokenResp = await callLoginPopup();
-                } else {
-                    throw firstErr;
+                        tokenResp = await fixMsal.loginPopup(popupRequest);
+                    } else {
+                        throw firstErr;
+                    }
                 }
             }
         } catch (popupErr) {
