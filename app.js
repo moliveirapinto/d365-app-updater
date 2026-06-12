@@ -376,10 +376,141 @@ function loadSavedCredentials() {
     }
 }
 
+// ─── AUTO-FIX REDIRECT RETURN HANDLER ──────────────────────────────────────
+// The "Fix automatically" button (window.autoFixMissingSp) now uses a full-page
+// redirect instead of a popup. Before redirecting it stashes the provisioning
+// context in sessionStorage under d365_autofix_redirect. When Microsoft sends
+// us back here, this detects the flag + the auth hash, redeems the Microsoft
+// Graph token, and provisions the missing first-party service principal
+// (POST /servicePrincipals { appId } — exactly what `az ad sp create` does).
+// Returns true if it consumed the redirect so the normal login flow stops.
+//
+// IMPORTANT: we build the MSAL instance DIRECTLY here (not via __prepFixMsal),
+// because __prepFixMsal sweeps msal.* cache keys — which would delete the very
+// request state (code_verifier / nonce) that handleRedirectPromise needs to
+// redeem this redirect.
+async function maybeHandleAutoFixRedirect() {
+    let ctx = null;
+    try { ctx = JSON.parse(sessionStorage.getItem('d365_autofix_redirect') || 'null'); } catch (e) {}
+    if (!ctx || !ctx.clientId) return false;
+    const h = window.location.hash || '';
+    const hasAuthHash = h.indexOf('code=') !== -1 || h.indexOf('access_token=') !== -1
+        || h.indexOf('error=') !== -1 || h.indexOf('state=') !== -1;
+    if (!hasAuthHash) return false; // flag set, but we haven't returned from Microsoft yet
+    // One-shot: clear immediately so a refresh can't loop.
+    sessionStorage.removeItem('d365_autofix_redirect');
+    // If Microsoft returned an error, let the normal error handler render it.
+    if (h.indexOf('error=') !== -1) return false;
+
+    function banner(html, color) {
+        let el = document.getElementById('autoFixRedirectBanner');
+        if (!el) {
+            el = document.createElement('div');
+            el.id = 'autoFixRedirectBanner';
+            el.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:99999;padding:14px 18px;'
+                + 'font-family:Segoe UI,system-ui,sans-serif;font-size:14px;line-height:1.4;color:#fff;'
+                + 'background:#0b3a66;border-bottom:1px solid #1565c0;box-shadow:0 2px 8px rgba(0,0,0,.35);';
+            (document.body || document.documentElement).appendChild(el);
+        }
+        el.innerHTML = html;
+        if (color) el.style.background = color;
+    }
+    const resetLink = window.location.origin + window.location.pathname + '?reset=1';
+
+    try {
+        const missingId = (ctx.missingId || '').toLowerCase();
+        const missingName = ctx.missingName || 'the required Microsoft service';
+        banner('<i class="fas fa-spinner fa-spin"></i> Finishing setup&hellip; provisioning <strong>' + missingName + '</strong> in your tenant.');
+
+        // Build a clean MSAL instance WITHOUT sweeping the cache, then redeem.
+        const cfg = (typeof createMsalConfig === 'function')
+            ? createMsalConfig(ctx.tenantId || '', ctx.clientId)
+            : {
+                auth: {
+                    clientId: ctx.clientId,
+                    authority: 'https://login.microsoftonline.com/' + (ctx.tenantId || 'common'),
+                    redirectUri: window.location.origin + window.location.pathname
+                },
+                cache: { cacheLocation: 'localStorage', storeAuthStateInCookie: true }
+            };
+        const inst = new msal.PublicClientApplication(cfg);
+        if (typeof inst.initialize === 'function') await inst.initialize();
+        const resp = await inst.handleRedirectPromise();
+        let graphToken = resp && resp.accessToken;
+        if (!graphToken) {
+            // Hash already drained — acquire the Graph token silently from cache.
+            const accts = inst.getAllAccounts();
+            if (accts && accts.length) {
+                try {
+                    const r = await inst.acquireTokenSilent({
+                        scopes: ['https://graph.microsoft.com/Application.ReadWrite.All'],
+                        account: accts[0]
+                    });
+                    graphToken = r && r.accessToken;
+                } catch (e) { /* fall through */ }
+            }
+        }
+        if (!graphToken) {
+            banner('Could not obtain a Microsoft Graph token. <a href="' + resetLink + '" style="color:#fff;text-decoration:underline;">Start over</a> and try again.', '#8a1f1f');
+            try { history.replaceState(null, '', window.location.pathname); } catch (e) {}
+            return true;
+        }
+
+        // Idempotent: skip the POST if the SP already exists.
+        const checkUrl = 'https://graph.microsoft.com/v1.0/servicePrincipals?$filter=appId eq \'' + missingId + '\'&$select=id';
+        const checkResp = await fetch(checkUrl, { headers: { 'Authorization': 'Bearer ' + graphToken } });
+        if (checkResp.ok) {
+            const d = await checkResp.json();
+            if (d && d.value && d.value.length > 0) {
+                banner('&#x2705; <strong>' + missingName + '</strong> is provisioned in your tenant. Reconnecting&hellip;', '#15803d');
+                finishAutoFixAndReconnect({ orgUrl: ctx.orgUrl, clientId: ctx.clientId, tenantId: ctx.tenantId });
+                return true;
+            }
+        }
+
+        const createResp = await fetch('https://graph.microsoft.com/v1.0/servicePrincipals', {
+            method: 'POST',
+            headers: { 'Authorization': 'Bearer ' + graphToken, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ appId: missingId })
+        });
+        if (createResp.ok) {
+            banner('&#x2705; <strong>' + missingName + '</strong> provisioned successfully. Reconnecting&hellip;', '#15803d');
+            finishAutoFixAndReconnect({ orgUrl: ctx.orgUrl, clientId: ctx.clientId, tenantId: ctx.tenantId });
+            return true;
+        }
+
+        let errText = await createResp.text();
+        let errBody = errText;
+        try { errBody = (JSON.parse(errText).error && JSON.parse(errText).error.message) || errText; } catch (e) {}
+        try { history.replaceState(null, '', window.location.pathname); } catch (e) {}
+        if (createResp.status === 403 || /Authorization_RequestDenied|insufficient privileges/i.test(errBody)) {
+            banner('Microsoft Graph rejected the request: <code>' + errBody + '</code><br>The signed-in user must be a <strong>Global Administrator</strong>, <strong>Application Administrator</strong>, or <strong>Cloud Application Administrator</strong>. <a href="' + resetLink + '" style="color:#fff;text-decoration:underline;">Start over</a> and sign in with one of those roles.', '#8a1f1f');
+        } else {
+            banner('Provisioning failed (' + createResp.status + '): <code>' + errBody + '</code>. <a href="' + resetLink + '" style="color:#fff;text-decoration:underline;">Start over</a>.', '#8a1f1f');
+        }
+        return true;
+    } catch (e) {
+        try { history.replaceState(null, '', window.location.pathname); } catch (e2) {}
+        banner('Auto-fix error: ' + ((e && e.message) || String(e)) + '. <a href="' + resetLink + '" style="color:#fff;text-decoration:underline;">Start over</a>.', '#8a1f1f');
+        return true;
+    }
+}
+
 // Handle redirect response when returning from Microsoft login redirect
 async function handleRedirectResponse() {
     logInfo('=== handleRedirectResponse START ===');
-    
+
+    // Intercept a returning "Fix automatically" redirect BEFORE the normal
+    // login flow consumes the hash. If handled, stop here.
+    try {
+        if (await maybeHandleAutoFixRedirect()) {
+            logInfo('Auto-fix redirect handled; halting normal redirect processing.');
+            return;
+        }
+    } catch (e) {
+        try { logWarn('Auto-fix redirect check failed', e && e.message); } catch (e2) {}
+    }
+
     // Check if URL hash contains an error response from Azure AD
     const hash = window.location.hash;
     if (hash && (hash.includes('error=') || hash.includes('error_description='))) {
@@ -3969,134 +4100,53 @@ window.autoFixMissingSp = async function(missingId, missingName) {
             return;
         }
 
-        setBtn('<i class="fas fa-spinner fa-spin"></i> Signing you in...', true);
-        setStatus('Opening Microsoft sign-in popup. Approve the Application.ReadWrite.All permission when asked.');
-
-        const scopes = ['https://graph.microsoft.com/Application.ReadWrite.All'];
-        const popupRequest = { scopes, prompt: 'select_account' };
-        let tokenResp;
-
-        // ─── BLANK-POPUP FIX ──────────────────────────────────────────────
-        // MSAL v2 opens the sign-in popup window SYNCHRONOUSLY inside the call
-        // to loginPopup, specifically so the window inherits the click's
-        // user-activation. If ANY `await` runs before loginPopup (initialize,
-        // handleRedirectPromise, cookie sweeps), the browser no longer treats
-        // this call as a user gesture, so the popup opens but is blocked from
-        // navigating to login.microsoftonline.com — that is the BLANK popup the
-        // user sees. Fix: build + initialize + drain + sweep a fresh MSAL
-        // instance EAGERLY the moment the AADSTS650052 panel renders (see
-        // window.__prepFixMsal), and here call loginPopup as the FIRST
-        // statement with NO preceding await so the gesture is preserved.
-        let fixMsal = window.__fixMsalReady || null;
-        let loginPromise = null;
-        if (fixMsal) {
-            // Synchronous path — gesture preserved, popup navigates correctly.
-            try { loginPromise = fixMsal.loginPopup(popupRequest); }
-            catch (e) { loginPromise = Promise.reject(e); }
-        }
+        // ─── FULL-PAGE REDIRECT FLOW (replaces the fragile popup) ─────────
+        // Popups on GitHub Pages are unreliable for this flow: the sign-in
+        // window opens BLANK whenever user-activation is lost after any await,
+        // and MSAL's window.closed monitor trips the page's Cross-Origin-Opener-
+        // Policy guard, so the popup never completes. A full-page redirect has
+        // NEITHER problem — it always reaches login.microsoftonline.com and
+        // needs no user-activation. We stash the provisioning context, then
+        // redirect. On return, maybeHandleAutoFixRedirect() (called at the top
+        // of handleRedirectResponse) drains the Microsoft Graph token from the
+        // response and provisions the missing service principal automatically.
+        setBtn('<i class="fas fa-spinner fa-spin"></i> Redirecting to Microsoft sign-in...', true);
+        setStatus('Redirecting you to Microsoft sign-in. Approve the <code>Application.ReadWrite.All</code> permission and you will be brought right back to finish provisioning <strong>' + missingName + '</strong>. No popup, no CLI.');
 
         try {
-            if (loginPromise) {
-                tokenResp = await loginPromise;
-            } else {
-                // Eager prep had not finished yet (rare: user clicked before
-                // initialize() resolved). Build/initialize now, then open the
-                // popup. This fallback runs after an await so the popup may be
-                // blocked by the browser; if so MSAL surfaces popup_window_error
-                // which we report below with a retry hint.
-                setStatus('Preparing secure sign-in&hellip;');
+            sessionStorage.setItem('d365_autofix_redirect', JSON.stringify({
+                missingId: missingId,
+                missingName: missingName,
+                clientId: clientId,
+                tenantId: tenantId,
+                orgUrl: (creds && creds.orgUrl) || ''
+            }));
+        } catch (stashErr) {
+            setStatus('Could not start the fix (browser storage is blocked). Use the manual options above.', '#ff6b6b');
+            setBtn('Try again', false);
+            return;
+        }
+
+        const scopes = ['https://graph.microsoft.com/Application.ReadWrite.All'];
+        // Build (or reuse) a clean MSAL instance. Awaits are fine here: unlike a
+        // popup, a full-page navigation does not require user-activation.
+        let fixMsal = window.__fixMsalReady || null;
+        if (!fixMsal) {
+            try {
                 fixMsal = await (typeof window.__prepFixMsal === 'function'
                     ? window.__prepFixMsal(clientId, tenantId)
-                    : Promise.reject(new Error('Sign-in could not be prepared. Click the button again.')));
-                window.__fixMsalReady = fixMsal;
-                try {
-                    tokenResp = await fixMsal.loginPopup(popupRequest);
-                } catch (firstErr) {
-                    const firstDesc = (firstErr && (firstErr.errorMessage || firstErr.message)) || String(firstErr);
-                    // Stale interaction lock — drain it once and retry.
-                    if (/interaction_in_progress|interaction is currently in progress/i.test(firstDesc)) {
-                        try { await fixMsal.handleRedirectPromise(); } catch (e) {}
-                        tokenResp = await fixMsal.loginPopup(popupRequest);
-                    } else {
-                        throw firstErr;
-                    }
-                }
-            }
-        } catch (popupErr) {
-            const desc = (popupErr && (popupErr.errorMessage || popupErr.message)) || String(popupErr);
-            // AADSTS65001 = no consent for the requested permission on this app reg.
-            if (/AADSTS65001|consent_required/i.test(desc)) {
-                const consentUrl = 'https://login.microsoftonline.com/' + (tenantId || 'common')
-                    + '/adminconsent?client_id=' + encodeURIComponent(clientId);
-                setStatus(
-                    'Your app registration is missing the <code>Application.ReadWrite.All</code> Microsoft Graph permission. '
-                    + '<a href="' + consentUrl + '" target="_blank" rel="noopener" style="color:#fff;text-decoration:underline;">Grant admin consent on the app reg</a>, '
-                    + 'then click <strong>Fix automatically</strong> again.',
-                    '#ffd166'
-                );
-            } else if (/popup_window_error|user_cancelled|popup closed/i.test(desc)) {
-                setStatus('Sign-in popup was closed. Click the button again to retry.', '#ffd166');
-            } else if (/interaction_in_progress|interaction is currently in progress/i.test(desc)) {
-                setStatus('Another sign-in is already in progress. Close any Microsoft sign-in popups or other tabs of this app, then click <strong>Fix automatically</strong> again. If the issue persists, click <em>Start Fresh</em>.', '#ffd166');
-            } else {
-                setStatus('Sign-in failed: ' + desc, '#ff6b6b');
-            }
-            setBtn('Fix automatically (admin only)', false);
-            return;
-        }
-
-        const graphToken = tokenResp && tokenResp.accessToken;
-        if (!graphToken) {
-            setStatus('Did not receive a Microsoft Graph access token. Try again.', '#ff6b6b');
-            setBtn('Fix automatically (admin only)', false);
-            return;
-        }
-
-        setBtn('<i class="fas fa-spinner fa-spin"></i> Provisioning ' + missingName + '...', true);
-        setStatus('Calling Microsoft Graph: POST /servicePrincipals { appId: ' + missingId + ' } &mdash; this is exactly what <code>az ad sp create</code> does.');
-
-        // Idempotent check first.
-        const checkUrl = 'https://graph.microsoft.com/v1.0/servicePrincipals?$filter=appId eq \'' + missingId + '\'&$select=id,appId,displayName';
-        const checkResp = await fetch(checkUrl, { headers: { 'Authorization': 'Bearer ' + graphToken } });
-        if (checkResp.ok) {
-            const checkData = await checkResp.json();
-            if (checkData && checkData.value && checkData.value.length > 0) {
-                setStatus('&#x2705; <strong>' + missingName + '</strong> is now provisioned in your tenant. Reconnecting...', '#7be09b');
-                setBtn('&#x2705; Already provisioned', true);
-                finishAutoFixAndReconnect(creds);
+                    : Promise.reject(new Error('Sign-in could not be prepared. Refresh the page and try again.')));
+            } catch (prepErr) {
+                sessionStorage.removeItem('d365_autofix_redirect');
+                setStatus('Could not prepare sign-in: ' + ((prepErr && prepErr.message) || String(prepErr)) + '. Use the manual options above.', '#ff6b6b');
+                setBtn('Try again', false);
                 return;
             }
         }
-
-        const createResp = await fetch('https://graph.microsoft.com/v1.0/servicePrincipals', {
-            method: 'POST',
-            headers: { 'Authorization': 'Bearer ' + graphToken, 'Content-Type': 'application/json' },
-            body: JSON.stringify({ appId: missingId })
-        });
-
-        if (createResp.ok) {
-            setStatus('&#x2705; <strong>' + missingName + '</strong> provisioned successfully. Reconnecting...', '#7be09b');
-            setBtn('&#x2705; Done', true);
-            finishAutoFixAndReconnect(creds);
-            return;
-        }
-
-        const errText = await createResp.text();
-        let errBody = errText;
-        try { errBody = (JSON.parse(errText).error && JSON.parse(errText).error.message) || errText; } catch (e) {}
-
-        if (createResp.status === 403 || /Authorization_RequestDenied|insufficient privileges/i.test(errBody)) {
-            setStatus(
-                'Microsoft Graph rejected the request: <code>' + errBody + '</code><br>'
-                + 'The signed-in user must be a <strong>Global Administrator</strong>, <strong>Application Administrator</strong>, '
-                + 'or <strong>Cloud Application Administrator</strong>. Sign in as a user with one of those roles and try again, '
-                + 'or use the manual options above.',
-                '#ff6b6b'
-            );
-        } else {
-            setStatus('Provisioning failed (' + createResp.status + '): <code>' + errBody + '</code><br>Try the manual options above.', '#ff6b6b');
-        }
-        setBtn('Try again', false);
+        // Navigates the whole tab to Microsoft — execution resumes on return in
+        // maybeHandleAutoFixRedirect(). loginRedirect's promise never resolves.
+        await fixMsal.loginRedirect({ scopes: scopes, prompt: 'select_account' });
+        return;
     } catch (e) {
         setStatus('Unexpected error: ' + (e && e.message ? e.message : String(e)) + '<br>Try the manual options above.', '#ff6b6b');
         setBtn('Try again', false);
