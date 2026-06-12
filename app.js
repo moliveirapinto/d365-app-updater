@@ -389,16 +389,63 @@ function loadSavedCredentials() {
 // because __prepFixMsal sweeps msal.* cache keys — which would delete the very
 // request state (code_verifier / nonce) that handleRedirectPromise needs to
 // redeem this redirect.
+// URL-safe base64 encode/decode for the auto-fix context we carry through the
+// OAuth round-trip. Used as a last-resort recovery path when BOTH localStorage
+// and sessionStorage are wiped by the browser's tracking prevention during the
+// cross-site redirect to login.microsoftonline.com and back.
+function _afEncodeCtx(o) {
+    try {
+        return btoa(unescape(encodeURIComponent(JSON.stringify(o))))
+            .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+    } catch (e) { return ''; }
+}
+function _afDecodeCtx(s) {
+    try {
+        let b = String(s).replace(/-/g, '+').replace(/_/g, '/');
+        while (b.length % 4) b += '=';
+        return JSON.parse(decodeURIComponent(escape(atob(b))));
+    } catch (e) { return null; }
+}
+// Recover the auto-fix context from the OAuth `state` in the URL hash. MSAL
+// returns state as base64(libraryState) + "|" + userState; we put our encoded
+// context in userState. This survives even a full storage wipe.
+function _afCtxFromHash() {
+    try {
+        const h = window.location.hash || '';
+        const m = h.match(/[#&]state=([^&]+)/);
+        if (!m) return null;
+        const raw = decodeURIComponent(m[1]);
+        const parts = raw.split('|');
+        for (let i = parts.length - 1; i >= 0; i--) {
+            const obj = _afDecodeCtx(parts[i]);
+            if (obj && obj.af && obj.clientId) return obj;
+        }
+        return null;
+    } catch (e) { return null; }
+}
+
 async function maybeHandleAutoFixRedirect() {
-    let ctx = null;
-    try { ctx = JSON.parse(sessionStorage.getItem('d365_autofix_redirect') || 'null'); } catch (e) {}
-    if (!ctx || !ctx.clientId) return false;
     const h = window.location.hash || '';
     const hasAuthHash = h.indexOf('code=') !== -1 || h.indexOf('access_token=') !== -1
         || h.indexOf('error=') !== -1 || h.indexOf('state=') !== -1;
-    if (!hasAuthHash) return false; // flag set, but we haven't returned from Microsoft yet
-    // One-shot: clear immediately so a refresh can't loop.
-    sessionStorage.removeItem('d365_autofix_redirect');
+    if (!hasAuthHash) return false; // not returning from Microsoft yet
+
+    // Resolve the stashed provisioning context. localStorage is the primary
+    // store (it survives the cross-site redirect where sessionStorage does
+    // not), with sessionStorage and the URL-hash state carrier as fallbacks.
+    let ctx = null;
+    try { ctx = JSON.parse(localStorage.getItem('d365_autofix_redirect') || 'null'); } catch (e) {}
+    if (!ctx || !ctx.clientId) {
+        try { ctx = JSON.parse(sessionStorage.getItem('d365_autofix_redirect') || 'null'); } catch (e) {}
+    }
+    if (!ctx || !ctx.clientId) {
+        ctx = _afCtxFromHash();
+    }
+    if (!ctx || !ctx.clientId) return false; // not an auto-fix redirect
+    logInfo('Auto-fix redirect context resolved', { source: 'storage-or-hash', clientId: ctx.clientId });
+    // One-shot: clear both stores immediately so a refresh can't loop.
+    try { localStorage.removeItem('d365_autofix_redirect'); } catch (e) {}
+    try { sessionStorage.removeItem('d365_autofix_redirect'); } catch (e) {}
     // If Microsoft returned an error, let the normal error handler render it.
     if (h.indexOf('error=') !== -1) return false;
 
@@ -4113,15 +4160,24 @@ window.autoFixMissingSp = async function(missingId, missingName) {
         setBtn('<i class="fas fa-spinner fa-spin"></i> Redirecting to Microsoft sign-in...', true);
         setStatus('Redirecting you to Microsoft sign-in. Approve the <code>Application.ReadWrite.All</code> permission and you will be brought right back to finish provisioning <strong>' + missingName + '</strong>. No popup, no CLI.');
 
-        try {
-            sessionStorage.setItem('d365_autofix_redirect', JSON.stringify({
-                missingId: missingId,
-                missingName: missingName,
-                clientId: clientId,
-                tenantId: tenantId,
-                orgUrl: (creds && creds.orgUrl) || ''
-            }));
-        } catch (stashErr) {
+        const afCtx = {
+            af: 1,
+            missingId: missingId,
+            missingName: missingName,
+            clientId: clientId,
+            tenantId: tenantId,
+            orgUrl: (creds && creds.orgUrl) || ''
+        };
+        // Persist in localStorage (PRIMARY — survives the cross-site redirect to
+        // login.microsoftonline.com where sessionStorage gets cleared by tracking
+        // prevention) and sessionStorage (backup). We ALSO carry the same context
+        // inside the OAuth `state` below so it can be recovered straight from the
+        // URL hash even if all storage is wiped.
+        const afState = _afEncodeCtx(afCtx);
+        let stored = false;
+        try { localStorage.setItem('d365_autofix_redirect', JSON.stringify(afCtx)); stored = true; } catch (e) {}
+        try { sessionStorage.setItem('d365_autofix_redirect', JSON.stringify(afCtx)); stored = true; } catch (e) {}
+        if (!stored && !afState) {
             setStatus('Could not start the fix (browser storage is blocked). Use the manual options above.', '#ff6b6b');
             setBtn('Try again', false);
             return;
@@ -4137,6 +4193,7 @@ window.autoFixMissingSp = async function(missingId, missingName) {
                     ? window.__prepFixMsal(clientId, tenantId)
                     : Promise.reject(new Error('Sign-in could not be prepared. Refresh the page and try again.')));
             } catch (prepErr) {
+                try { localStorage.removeItem('d365_autofix_redirect'); } catch (e) {}
                 sessionStorage.removeItem('d365_autofix_redirect');
                 setStatus('Could not prepare sign-in: ' + ((prepErr && prepErr.message) || String(prepErr)) + '. Use the manual options above.', '#ff6b6b');
                 setBtn('Try again', false);
@@ -4145,7 +4202,9 @@ window.autoFixMissingSp = async function(missingId, missingName) {
         }
         // Navigates the whole tab to Microsoft — execution resumes on return in
         // maybeHandleAutoFixRedirect(). loginRedirect's promise never resolves.
-        await fixMsal.loginRedirect({ scopes: scopes, prompt: 'select_account' });
+        // `state` carries the provisioning context through the URL so it can be
+        // recovered even if storage is wiped during the cross-site redirect.
+        await fixMsal.loginRedirect({ scopes: scopes, prompt: 'select_account', state: afState });
         return;
     } catch (e) {
         setStatus('Unexpected error: ' + (e && e.message ? e.message : String(e)) + '<br>Try the manual options above.', '#ff6b6b');
